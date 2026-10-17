@@ -4,7 +4,7 @@ A small digital chip, written in Verilog, that draws a tree on a VGA monitor
 and lets it drop autumn leaves at random moments. Each leaf breaks off
 somewhere in the canopy, swings side to side like a pendulum on the way down,
 lands on the grass, lies there for a while and dissolves into the leaf pile
-under the tree.
+under the tree. Everything is drawn in chunky 4×4-pixel blocks (160×120).
 
 ![simulated VGA output](docs/preview.gif)
 
@@ -20,17 +20,17 @@ under the tree.
    `ui_in` above the picture to toggle the storm, and **1** to freeze (the
    number keys 0 and 1 do the same when the editor isn't focused).
 
-The playground simulates every gate in software, and this design is much
-bigger than the playground's examples, so it runs at only a few frames per
-second instead of 60: the leaves fall in slow motion. It shows exactly the
-same pixels as the real chip would.
+The playground simulates the design in software. In my tests in its
+simulator it ran at about 40 fps (a storm included), and it shows exactly
+the same pixels as the real chip would. Animation is counted in frames, so
+below 60 fps the leaves fall a little slower than on real hardware.
 
 `playground/project.v` is generated from `src/` by `make playground`. The
 submodules are renamed there so they don't clash with the playground's own
 `hvsync_generator`.
 
-There is no frame buffer: every pixel is computed on the fly as the beam
-scans the screen, so the design is pure logic plus about 450 flip-flops.
+There is no frame buffer: every block is computed on the fly as the beam
+scans the screen, so the design is pure logic plus about 590 flip-flops.
 
 ## Pins
 
@@ -53,11 +53,11 @@ The design uses the [Tiny Tapeout](https://tinytapeout.com) interface
   ┌─────────────┐  ┌───►│  tree_scene  ├──────────┐
   │ hvsync_gen  ├──┤    └──────────────┘          ▼
   │ 640x480@60  │  │    ┌──────────────┐ hit/rgb ┌─────┐   ┌──────┐
-  └─────────────┘  ├───►│  leaf × 8    ├────────►│ mux ├──►│ regs ├──► uo_out
+  └─────────────┘  ├───►│ leaves (8)   ├────────►│ mux ├──►│ regs ├──► uo_out
                    │    └──────▲───────┘         └─────┘   └──────┘
          frame_tick│           │ spawn, position, random bits
                    │    ┌──────┴───────┐
-                   └───►│ spawner +    │◄── 32-bit LFSR (runs every clock)
+                   └───►│ spawner +    │◄── 32-bit LFSR (steps every line)
                         │ LFSR         │
                         └──────────────┘
 ```
@@ -66,10 +66,10 @@ The design uses the [Tiny Tapeout](https://tinytapeout.com) interface
 |------|--------------|
 | [`src/tt_um_falling_leaves.v`](src/tt_um_falling_leaves.v) | Top level: LFSR, leaf spawner, cloud and leaf-pile state, pixel mux, output registers |
 | [`src/hvsync_generator.v`](src/hvsync_generator.v) | VGA timing counters and sync pulses |
-| [`src/leaf.v`](src/leaf.v) | One leaf: falling and swinging physics, landing, fade-out, 8×8 sprite drawn at 2× |
+| [`src/leaves.v`](src/leaves.v) | Eight leaf slots: falling and swinging physics, landing, fade-out, 4×4-block sprite |
 | [`src/tree_scene.v`](src/tree_scene.v) | Background: dithered sky, sun, drifting cloud, grassy mound, trunk, textured canopy, leaf pile |
 
-- **Randomness.** A 32-bit maximal-length Galois LFSR steps every clock. Once
+- **Randomness.** A 32-bit maximal-length Galois LFSR steps every line. Once
   per frame (at the start of vertical blanking) it decides how long to wait
   before the next leaf falls (30 to 157 frames, so about 0.5 to 2.6 s, or
   much faster in a storm). It also picks which part of the canopy the leaf
@@ -83,10 +83,16 @@ The design uses the [Tiny Tapeout](https://tinytapeout.com) interface
 - **Leaf pile.** Every leaf that finishes rotting on the grass adds to a
   4-bit `litter` counter, which sets how dense the pile of leaves around the
   trunk is drawn. The pile slowly shrinks again, and much faster in a storm.
-- **Drawing.** Shapes are unions of circles. Each circle test halves the
-  distance and uses a 64-entry square lookup table, so no real multipliers
-  are needed. Texture comes from cheap multiply-xorshift hashes of the pixel
-  position, and the sky gradient uses 4×4 ordered dithering.
+- **Drawing.** The screen is 160×120 blocks of 4×4 pixels. The scene and the
+  leaves are worked out once per block (one clock in four) and held, then
+  delayed sync signals line the colours up with the pixels. The canopy, sun
+  and mound are unions of rounded blobs (`|dx| < r`, `|dy| < r`,
+  `|dx| + |dy| < 1.5r`), so there are no multipliers. Texture comes from a
+  cheap multiply-xorshift hash of the block position.
+- **Leaf sprites.** During horizontal blanking, each leaf's sprite row for
+  the next line is looked up once (already mirrored, dissolved and
+  coloured). For each block only a subtraction and a bit test per leaf
+  remain.
 
 ## Running it
 
@@ -95,7 +101,7 @@ You need [Verilator](https://verilator.org), [Icarus Verilog](https://steveicaru
 
 ```sh
 make lint    # verilator -Wall lint (clean)
-make test    # Icarus testbench: 2 frames, sync timing, known pixels (~1 min)
+make test    # Icarus testbench: 2 frames, sync timing, known pixels (~10 s)
 make sim     # Verilator virtual monitor: 600 frames incl. storm + freeze checks
 make gif     # re-render docs/preview.gif
 make synth   # Yosys generic synthesis + cell count
@@ -111,8 +117,7 @@ picture stays exactly still while `freeze` is held.
 
 ## Size
 
-Generic Yosys synthesis gives about 10.8k gates and 452 flip-flops. Most of
-the logic is the 13 circle tests in the scene. The `tiles: "8x2"` in
-`info.yaml` is an estimate that has not been through the Tiny Tapeout
-hardening flow yet. The design also fits easily on any small FPGA with a VGA
+Generic Yosys synthesis gives about 6.2k gates and 587 flip-flops. The
+`tiles: "4x2"` in `info.yaml` is an estimate that has not been through the
+Tiny Tapeout hardening flow yet. The design also fits easily on any small FPGA with a VGA
 output (for example an iCE40 board with a VGA Pmod).

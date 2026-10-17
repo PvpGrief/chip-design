@@ -28,12 +28,14 @@ module tb;
   wire [1:0] g = {uo_out[1], uo_out[5]};
   wire [1:0] b = {uo_out[2], uo_out[6]};
 
-  // The output register adds one clock of latency: remember which beam
-  // position the pixel currently on the pins was computed for.
-  reg [9:0] sx, sy;
+  // The design has two clocks of latency from beam position to pins:
+  // remember which position the pixel currently on the pins belongs to.
+  reg [9:0] sx1, sy1, sx, sy;
   always @(posedge clk) begin
-    sx <= dut.hpos;
-    sy <= dut.vpos;
+    sx1 <= dut.hpos;
+    sy1 <= dut.vpos;
+    sx  <= sx1;
+    sy  <= sy1;
   end
 
   integer errors = 0;

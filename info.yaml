@@ -7,15 +7,15 @@ project:
   language:     "Verilog"
   clock_hz:     25175000
 
-  # ~10.8k generic gates after Yosys synthesis; estimate, not yet hardened
-  tiles: "8x2"
+  # ~6.2k generic gates after Yosys synthesis; estimate, not yet hardened
+  tiles: "4x2"
 
   top_module:  "tt_um_falling_leaves"
 
   source_files:
     - "tt_um_falling_leaves.v"
     - "hvsync_generator.v"
-    - "leaf.v"
+    - "leaves.v"
     - "tree_scene.v"
 
 # TinyVGA Pmod on the outputs

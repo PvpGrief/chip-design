@@ -8,12 +8,12 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-FILES = ["tt_um_falling_leaves.v", "leaf.v", "tree_scene.v", "hvsync_generator.v"]
+FILES = ["tt_um_falling_leaves.v", "leaves.v", "tree_scene.v", "hvsync_generator.v"]
 RENAMES = [
     ("module hvsync_generator (", "module falling_leaves_vga_timing ("),
     ("hvsync_generator vga (", "falling_leaves_vga_timing vga ("),
-    ("module leaf (", "module falling_leaves_leaf ("),
-    ("leaf u_leaf (", "falling_leaves_leaf u_leaf ("),
+    ("module leaves #(", "module falling_leaves_leaves #("),
+    ("leaves #(.N(8)) u_leaves (", "falling_leaves_leaves #(.N(8)) u_leaves ("),
     ("module tree_scene (", "module falling_leaves_scene ("),
     ("tree_scene scene (", "falling_leaves_scene scene ("),
 ]
