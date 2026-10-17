@@ -10,6 +10,25 @@ under the tree.
 
 *Simulated output, decoded from the chip's pins. The storm switch is turned on partway through.*
 
+## Try it in your browser
+
+1. Open [vga-playground.com](https://vga-playground.com).
+2. Open the `project.v` tab, select all and paste in
+   [`playground/project.v`](playground/project.v) (use the *Raw* button on
+   GitHub to copy it). Leave the playground's `hvsync_generator.v` tab alone.
+3. The tree appears once it compiles. Click the **0** button next to
+   `ui_in` above the picture to toggle the storm, and **1** to freeze (the
+   number keys 0 and 1 do the same when the editor isn't focused).
+
+The playground simulates every gate in software, and this design is much
+bigger than the playground's examples, so it runs at only a few frames per
+second instead of 60: the leaves fall in slow motion. It shows exactly the
+same pixels as the real chip would.
+
+`playground/project.v` is generated from `src/` by `make playground`. The
+submodules are renamed there so they don't clash with the playground's own
+`hvsync_generator`.
+
 There is no frame buffer: every pixel is computed on the fly as the beam
 scans the screen, so the design is pure logic plus about 450 flip-flops.
 
@@ -80,6 +99,7 @@ make test    # Icarus testbench: 2 frames, sync timing, known pixels (~1 min)
 make sim     # Verilator virtual monitor: 600 frames incl. storm + freeze checks
 make gif     # re-render docs/preview.gif
 make synth   # Yosys generic synthesis + cell count
+make playground  # regenerate playground/project.v
 ```
 
 `make sim` and `make gif` drive the chip through its pins only. The simulator

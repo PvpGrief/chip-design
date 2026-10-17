@@ -7,7 +7,7 @@ FRAMES ?= 1080
 EVERY  ?= 3
 STORM  ?= 660:840
 
-.PHONY: all lint test sim gif synth clean
+.PHONY: all lint test sim gif synth playground clean
 
 all: lint test sim
 
@@ -35,6 +35,10 @@ gif: $(SIM)
 	rm -rf $(BUILD)/frames && mkdir -p $(BUILD)/frames
 	$(SIM) --frames $(FRAMES) --every $(EVERY) --storm $(STORM) --out $(BUILD)/frames
 	python3 sim/make_gif.py $(BUILD)/frames docs/preview.gif --every $(EVERY)
+
+# Single-file bundle for https://vga-playground.com
+playground:
+	python3 sim/make_playground.py
 
 synth: | $(BUILD)
 	yosys -q -p "read_verilog $(SRC); synth -flatten -top $(TOP); tee -o $(BUILD)/synth_stat.txt stat"

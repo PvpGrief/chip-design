@@ -92,9 +92,9 @@ module tree_scene (
   function in_circle;
     input [9:0] px, py, cx, cy;
     input [5:0] r;
-    /* verilator lint_off UNUSEDSIGNAL */
+    /* verilator lint_off UNUSED */
     reg [9:0]  dx, dy, ax, ay;  // bit 0 is dropped by the halving
-    /* verilator lint_on UNUSEDSIGNAL */
+    /* verilator lint_on UNUSED */
     reg [11:0] sx, sy, rr;
     begin
       dx = px - cx;
