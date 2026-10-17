@@ -1,0 +1,50 @@
+# Tiny Tapeout project information
+project:
+  title:        "Falling Leaves"
+  author:       "PvpGrief"
+  discord:      ""
+  description:  "A VGA tree that drops autumn leaves at random moments"
+  language:     "Verilog"
+  clock_hz:     25175000
+
+  # ~10.8k generic gates after Yosys synthesis; estimate, not yet hardened
+  tiles: "8x2"
+
+  top_module:  "tt_um_falling_leaves"
+
+  source_files:
+    - "tt_um_falling_leaves.v"
+    - "hvsync_generator.v"
+    - "leaf.v"
+    - "tree_scene.v"
+
+# TinyVGA Pmod on the outputs
+pinout:
+  ui[0]: "storm"
+  ui[1]: "freeze"
+  ui[2]: ""
+  ui[3]: ""
+  ui[4]: ""
+  ui[5]: ""
+  ui[6]: ""
+  ui[7]: ""
+
+  uo[0]: "R1"
+  uo[1]: "G1"
+  uo[2]: "B1"
+  uo[3]: "VSync"
+  uo[4]: "R0"
+  uo[5]: "G0"
+  uo[6]: "B0"
+  uo[7]: "HSync"
+
+  uio[0]: ""
+  uio[1]: ""
+  uio[2]: ""
+  uio[3]: ""
+  uio[4]: ""
+  uio[5]: ""
+  uio[6]: ""
+  uio[7]: ""
+
+yaml_version: 6
