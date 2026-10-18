@@ -1,3 +1,7 @@
 build/
 *.vcd
 *.fst
+test/sim_build/
+test/results.xml
+test/tb.fst
+__pycache__/

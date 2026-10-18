@@ -17,8 +17,8 @@ lint:
 test: $(BUILD)/tb.vvp
 	vvp -n $<
 
-$(BUILD)/tb.vvp: $(SRC) test/tb.v | $(BUILD)
-	iverilog -g2005 -Wall -o $@ -s tb test/tb.v $(SRC)
+$(BUILD)/tb.vvp: $(SRC) test/tb_smoke.v | $(BUILD)
+	iverilog -g2005 -Wall -o $@ -s tb_smoke test/tb_smoke.v $(SRC)
 
 # Verilator "virtual monitor" with robot players: decodes the pins, checks
 # timing, buttons, the gamepad path, rallies and scoring.

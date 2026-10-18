@@ -45,6 +45,28 @@ submodules. That way tools that check "the" module for the Tiny Tapeout
 ports (such as Vulkos) can't pick the wrong one, and it doesn't clash with
 the `hvsync_generator.v` the playground adds to every project.
 
+## See the real chip
+
+Every push runs Tiny Tapeout's GitHub Actions (in
+[`.github/workflows`](.github/workflows)). The **gds** workflow turns the
+Verilog into a real chip layout for the SkyWater 130 nm process, with
+Tiny Tapeout's flow ([LibreLane](https://librelane.readthedocs.io)), then:
+
+- **precheck** runs Tiny Tapeout's official checks on the layout;
+- **gl_test** runs the cocotb test ([`test/test.py`](test/test.py)) on the
+  gate-level netlist, the actual logic cells of the chip;
+- **viewer** publishes an interactive 3D view of the chip to GitHub Pages.
+
+To see the results, open the repository's **Actions** tab, click the latest
+**gds** run and scroll down to its summary. It shows a picture of the
+layout, how much of the tiles the design uses, the number of each kind of
+logic cell (including the flip-flops, i.e. the bits of storage), timing,
+and a link to the 3D viewer. The finished layout files (GDS, LEF, netlist)
+are under **Artifacts** at the bottom of the run.
+
+The **test** workflow runs the cocotb test on the Verilog, and **docs**
+builds the datasheet page from [`docs/info.md`](docs/info.md).
+
 ## Pins
 
 The design uses the [Tiny Tapeout](https://tinytapeout.com) interface
@@ -113,7 +135,8 @@ You need [Verilator](https://verilator.org), [Icarus Verilog](https://steveicaru
 
 ```sh
 make lint        # verilator -Wall lint (clean)
-make test        # Icarus testbench: 2 frames, sync timing, known pixels (~10 s)
+make test        # Icarus smoke test: 2 frames, sync timing, known pixels (~10 s)
+cd test && make  # cocotb test, as run by GitHub Actions (needs: pip install -r test/requirements.txt)
 make sim         # Verilator virtual monitor with robot players (~1.5 min)
 make gif         # re-render docs/preview.gif
 make synth       # Yosys generic synthesis + cell count
