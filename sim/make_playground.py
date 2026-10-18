@@ -2,31 +2,29 @@
 """Bundle src/*.v into one file for https://vga-playground.com.
 
 The playground compiles everything in the project together and always ships
-its own hvsync_generator.v, so the submodules get unique names here.
+its own hvsync_generator.v, so our VGA timing module is renamed here.
 """
 import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-FILES = ["tt_um_falling_leaves.v", "leaves.v", "tree_scene.v", "hvsync_generator.v"]
+FILES = ["tt_um_pvpgrief_pong.v", "pong_game.v", "pong_render.v", "pong_gamepad.v", "hvsync_generator.v"]
 RENAMES = [
-    ("module hvsync_generator (", "module falling_leaves_vga_timing ("),
-    ("hvsync_generator vga (", "falling_leaves_vga_timing vga ("),
-    ("module leaves #(", "module falling_leaves_leaves #("),
-    ("leaves #(.N(8)) u_leaves (", "falling_leaves_leaves #(.N(8)) u_leaves ("),
-    ("module tree_scene (", "module falling_leaves_scene ("),
-    ("tree_scene scene (", "falling_leaves_scene scene ("),
+    ("module hvsync_generator (", "module pong_vga_timing ("),
+    ("hvsync_generator vga (", "pong_vga_timing vga ("),
 ]
 
 HEADER = """\
-// Falling Leaves: a VGA tree that drops autumn leaves at random.
+// Two-player Pong with a ball trail.
 // https://github.com/PvpGrief/chip-design
 //
 // Single-file bundle for https://vga-playground.com: paste this over
 // project.v. Generated from src/ by sim/make_playground.py; don't edit by hand.
 //
-//   ui_in[0]  storm:  wind, grey sky and lots of leaves
-//   ui_in[1]  freeze: pause the animation
+// Turn on the playground's gamepad mode (gamepad button next to ui_in), then:
+//   left player:  S = up, X = down
+//   right player: arrow up / arrow down
+//   T (Start):    new game
 
 `default_nettype none
 """

@@ -1,11 +1,10 @@
 SRC    := $(wildcard src/*.v)
-TOP    := tt_um_falling_leaves
+TOP    := tt_um_pvpgrief_pong
 BUILD  := build
-SIM    := $(BUILD)/obj/sim_falling_leaves
+SIM    := $(BUILD)/obj/sim_pong
 
-FRAMES ?= 1080
-EVERY  ?= 3
-STORM  ?= 660:840
+FRAMES ?= 1200
+EVERY  ?= 2
 
 .PHONY: all lint test sim gif synth playground clean
 
@@ -21,19 +20,19 @@ test: $(BUILD)/tb.vvp
 $(BUILD)/tb.vvp: $(SRC) test/tb.v | $(BUILD)
 	iverilog -g2005 -Wall -o $@ -s tb test/tb.v $(SRC)
 
-# Verilator "virtual monitor": decodes the pins, checks timing over many
-# frames, verifies leaves fall and freeze works.
+# Verilator "virtual monitor" with robot players: decodes the pins, checks
+# timing, buttons, the gamepad path, rallies and scoring.
 sim: $(SIM)
-	$(SIM) --frames 600 --storm 300:420 --freeze 500:540
+	$(SIM) --mode test
 
 $(SIM): $(SRC) sim/sim_main.cpp | $(BUILD)
 	verilator --cc --exe --build -O3 -Wall -Isrc $(SRC) $(abspath sim/sim_main.cpp) \
-	  --top-module $(TOP) -Mdir $(BUILD)/obj -o sim_falling_leaves -CFLAGS -O2
+	  --top-module $(TOP) -Mdir $(BUILD)/obj -o sim_pong -CFLAGS -O2
 
 # Render an animated preview to docs/preview.gif
 gif: $(SIM)
 	rm -rf $(BUILD)/frames && mkdir -p $(BUILD)/frames
-	$(SIM) --frames $(FRAMES) --every $(EVERY) --storm $(STORM) --out $(BUILD)/frames
+	$(SIM) --mode demo --frames $(FRAMES) --every $(EVERY) --out $(BUILD)/frames
 	python3 sim/make_gif.py $(BUILD)/frames docs/preview.gif --every $(EVERY)
 
 # Single-file bundle for https://vga-playground.com

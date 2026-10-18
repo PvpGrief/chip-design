@@ -1,14 +1,15 @@
-# Falling Leaves
+# Pong with a trail
 
-A small digital chip, written in Verilog, that draws a tree on a VGA monitor
-and lets it drop autumn leaves at random moments. Each leaf breaks off
-somewhere in the canopy, swings side to side like a pendulum on the way down,
-lands on the grass, lies there for a while and dissolves into the leaf pile
-under the tree. Everything is drawn in chunky 4×4-pixel blocks (160×120).
+A small digital chip, written in Verilog, that plays two-player Pong on a VGA
+monitor. The ball leaves a tapering trail of copies of itself in the same
+colour, and every return makes it a little faster. The paddles speed up along
+with it, so rallies get more intense without becoming impossible. First to 9
+wins.
 
 ![simulated VGA output](docs/preview.gif)
 
-*Simulated output, decoded from the chip's pins. The storm switch is turned on partway through.*
+*Simulated output, decoded from the chip's pins. Two robot players drive the
+chip's buttons; the right one is deliberately slow so it misses now and then.*
 
 ## Try it in your browser
 
@@ -16,83 +17,88 @@ under the tree. Everything is drawn in chunky 4×4-pixel blocks (160×120).
 2. Open the `project.v` tab, select all and paste in
    [`playground/project.v`](playground/project.v) (use the *Raw* button on
    GitHub to copy it). Leave the playground's `hvsync_generator.v` tab alone.
-3. The tree appears once it compiles. Click the **0** button next to
-   `ui_in` above the picture to toggle the storm, and **1** to freeze (the
-   number keys 0 and 1 do the same when the editor isn't focused).
+3. Click the **gamepad** button (*Toggle Gamepad Mode*) next to `ui_in`
+   above the picture to turn on the emulated Gamepad Pmod. Then click
+   somewhere outside the code editor, so it doesn't catch the key presses,
+   and play:
 
-The playground simulates the design in software. In my tests in its
-simulator it ran at about 40 fps (a storm included), and it shows exactly
-the same pixels as the real chip would. Animation is counted in frames, so
-below 60 fps the leaves fall a little slower than on real hardware.
+| Player | Up | Down |
+|--------|----|------|
+| Left (cyan)     | **S** | **X** |
+| Right (magenta) | **↑** | **↓** |
 
-`playground/project.v` is generated from `src/` by `make playground`. The
-submodules are renamed there so they don't clash with the playground's own
+**T** starts a new game.
+
+The playground only passes the arrow keys and A, B, X, Y, L, R, S and T to
+the chip (as an emulated SNES-style controller), so **W** can't be used;
+S and X sit right above each other, which is the closest match to W/S.
+
+In my tests in the playground's own simulator it ran at about 34 fps, with
+exactly the same pixels as the real chip. The game counts in frames, so below
+60 fps it plays a little slower than on real hardware.
+
+`playground/project.v` is generated from `src/` by `make playground`. The VGA
+timing module is renamed there so it doesn't clash with the playground's own
 `hvsync_generator`.
-
-There is no frame buffer: every block is computed on the fly as the beam
-scans the screen, so the design is pure logic plus about 590 flip-flops.
 
 ## Pins
 
 The design uses the [Tiny Tapeout](https://tinytapeout.com) interface
-(`tt_um_falling_leaves`), with video on the
+(`tt_um_pvpgrief_pong`), with video on the
 [TinyVGA Pmod](https://github.com/mole99/tiny-vga) pinout.
 
-| Pin     | Function |
-|---------|----------|
+| Pin | Function |
+|-----|----------|
 | `clk`   | 25.175 MHz pixel clock (25 MHz works on most monitors) |
 | `rst_n` | Active-low synchronous reset |
-| `ui[0]` | **storm**: wind, grey sky, lots of leaves that blow away to the right |
-| `ui[1]` | **freeze**: pause the animation |
+| `ui[0]` / `ui[1]` | Left paddle up / down (1 = pressed) |
+| `ui[2]` / `ui[3]` | Right paddle up / down |
+| `ui[4..6]` | [Gamepad Pmod](https://github.com/psychogenic/gamepad-pmod) latch, clock, data |
+| `ui[7]` | New game |
 | `uo[7:0]` | `{HSync, B0, G0, R0, VSync, B1, G1, R1}`: 640×480 @ 60 Hz, 2 bits per colour |
+
+With the Gamepad Pmod and two controllers, controller 1's D-pad moves the
+right paddle and controller 2's D-pad moves the left paddle. Controller 1's
+Select/X also move the left paddle (that's what S/X do in the playground),
+and Start on either controller starts a new game.
 
 ## How it works
 
 ```
-              hpos/vpos ┌──────────────┐ scene rgb
-  ┌─────────────┐  ┌───►│  tree_scene  ├──────────┐
-  │ hvsync_gen  ├──┤    └──────────────┘          ▼
-  │ 640x480@60  │  │    ┌──────────────┐ hit/rgb ┌─────┐   ┌──────┐
-  └─────────────┘  ├───►│ leaves (8)   ├────────►│ mux ├──►│ regs ├──► uo_out
-                   │    └──────▲───────┘         └─────┘   └──────┘
-         frame_tick│           │ spawn, position, random bits
-                   │    ┌──────┴───────┐
-                   └───►│ spawner +    │◄── 32-bit LFSR (steps every line)
-                        │ LFSR         │
-                        └──────────────┘
+                     ┌─────────────┐  hpos/vpos
+                     │ hvsync_gen  ├──────────────┐
+                     │ 640x480@60  │              │
+                     └──────┬──────┘              ▼
+  ui[0..3] ──┐              │ frame tick   ┌──────────────┐  rgb  ┌──────┐
+             ├─► controls ─►┌──────────┐──►│ pong_render  ├──────►│ regs ├──► uo_out
+  ui[4..6] ──┤  (gamepad)   │pong_game │   └──────────────┘       └──────┘
+  ui[7] ─────┘              └──────────┘  paddles, ball, trail, scores
 ```
 
 | File | What it does |
 |------|--------------|
-| [`src/tt_um_falling_leaves.v`](src/tt_um_falling_leaves.v) | Top level: LFSR, leaf spawner, cloud and leaf-pile state, pixel mux, output registers |
+| [`src/tt_um_pvpgrief_pong.v`](src/tt_um_pvpgrief_pong.v) | Top level: control mapping, LFSR for serves, wiring, output registers |
+| [`src/pong_game.v`](src/pong_game.v) | Game state, once per frame: paddles, ball physics, bounces, scoring, serve/game-over states, trail history |
+| [`src/pong_render.v`](src/pong_render.v) | Draws walls, centre line, paddles, score digits, ball and trail |
+| [`src/pong_gamepad.v`](src/pong_gamepad.v) | Reads the Gamepad Pmod's serial stream (two controllers) |
 | [`src/hvsync_generator.v`](src/hvsync_generator.v) | VGA timing counters and sync pulses |
-| [`src/leaves.v`](src/leaves.v) | Eight leaf slots: falling and swinging physics, landing, fade-out, 4×4-block sprite |
-| [`src/tree_scene.v`](src/tree_scene.v) | Background: dithered sky, sun, drifting cloud, grassy mound, trunk, textured canopy, leaf pile |
 
-- **Randomness.** A 32-bit maximal-length Galois LFSR steps every line. Once
-  per frame (at the start of vertical blanking) it decides how long to wait
-  before the next leaf falls (30 to 157 frames, so about 0.5 to 2.6 s, or
-  much faster in a storm). It also picks which part of the canopy the leaf
-  starts from, the leaf's colour (orange, red, gold or russet), its starting
-  swing, where it lands and how long it stays on the ground.
-- **Leaves.** Eight leaf slots. Each one is a small state machine (idle,
-  falling, landed) with its own position. The spawner gives a new leaf to the
-  lowest free slot (`free & -free`). A falling leaf moves 2 px per frame
-  through the middle of each swing and 1 px at the ends, and its sprite
-  flips with each swing so it looks like it is fluttering.
-- **Leaf pile.** Every leaf that finishes rotting on the grass adds to a
-  4-bit `litter` counter, which sets how dense the pile of leaves around the
-  trunk is drawn. The pile slowly shrinks again, and much faster in a storm.
-- **Drawing.** The screen is 160×120 blocks of 4×4 pixels. The scene and the
-  leaves are worked out once per block (one clock in four) and held, then
-  delayed sync signals line the colours up with the pixels. The canopy, sun
-  and mound are unions of rounded blobs (`|dx| < r`, `|dy| < r`,
-  `|dx| + |dy| < 1.5r`), so there are no multipliers. Texture comes from a
-  cheap multiply-xorshift hash of the block position.
-- **Leaf sprites.** During horizontal blanking, each leaf's sprite row for
-  the next line is looked up once (already mirrored, dissolved and
-  coloured). For each block only a subtraction and a bit test per leaf
-  remain.
+- **Speed.** Speeds are kept in 1/16 px per frame. The ball starts at
+  4 px/frame across and gains 1/4 px/frame on every return, up to
+  10 px/frame (after 24 returns). The paddles always move 3 px/frame faster
+  than that: 7 px/frame at the start, up to 13. Both reset after each point.
+- **Bounces.** Where the ball meets the paddle sets its vertical speed
+  (1 to 6 px/frame): hit it with the paddle's edge for a steep return.
+- **Trail.** The game remembers the ball's last five positions (every other
+  frame) and draws them behind it as copies 8, 8, 6, 6 and 4 px wide.
+- **Serve and game over.** After a point the ball blinks in the middle for a
+  second, then goes toward the player who lost the point, at a random
+  angle. At 9 points the winner's score blinks for 4 s and a new game starts.
+- **Drawing.** Everything that only depends on the line (which objects cross
+  it, which row of the digits it shows) is worked out once per line during
+  horizontal blanking, so each pixel needs only a few comparisons. The per-
+  frame game logic is likewise prepared on the two lines before the update.
+  This keeps the design small and fast to simulate.
 
 ## Running it
 
@@ -100,24 +106,31 @@ You need [Verilator](https://verilator.org), [Icarus Verilog](https://steveicaru
 [Yosys](https://yosyshq.net/yosys/) and Python 3 with Pillow (the last only for the GIF).
 
 ```sh
-make lint    # verilator -Wall lint (clean)
-make test    # Icarus testbench: 2 frames, sync timing, known pixels (~10 s)
-make sim     # Verilator virtual monitor: 600 frames incl. storm + freeze checks
-make gif     # re-render docs/preview.gif
-make synth   # Yosys generic synthesis + cell count
+make lint        # verilator -Wall lint (clean)
+make test        # Icarus testbench: 2 frames, sync timing, known pixels (~10 s)
+make sim         # Verilator virtual monitor with robot players (~1.5 min)
+make gif         # re-render docs/preview.gif
+make synth       # Yosys generic synthesis + cell count
 make playground  # regenerate playground/project.v
 ```
 
-`make sim` and `make gif` drive the chip through its pins only. The simulator
+`make sim` drives the chip through its pins only. The simulator
 ([`sim/sim_main.cpp`](sim/sim_main.cpp)) recovers the picture from the sync
-pulses the way a monitor would. It checks every hsync and vsync period and
-pulse width, checks that nothing is driven during blanking, checks that
-leaves really appear in the air below the canopy, and checks that the
-picture stays exactly still while `freeze` is held.
+pulses the way a monitor would, finds the ball, paddles and scores in it, and
+presses the chip's buttons. It checks:
+
+- every hsync/vsync period and pulse width, and that nothing is driven
+  during blanking;
+- the plain buttons, and the Gamepad Pmod path (arrows, S and X, emulated
+  exactly as the playground sends them);
+- that two robot players can keep a rally going (paddle bounces, no misses,
+  a visible trail);
+- that the ball and the paddles get faster during the rally;
+- that a player who stops defending loses points.
 
 ## Size
 
-Generic Yosys synthesis gives about 6.2k gates and 587 flip-flops. The
-`tiles: "4x2"` in `info.yaml` is an estimate that has not been through the
-Tiny Tapeout hardening flow yet. The design also fits easily on any small FPGA with a VGA
-output (for example an iCE40 board with a VGA Pmod).
+Generic Yosys synthesis gives about 4.2k gates and 355 flip-flops. The
+`tiles: "3x2"` in `info.yaml` is an estimate that has not been through the
+Tiny Tapeout hardening flow yet. The design also fits easily on any small
+FPGA with a VGA output.

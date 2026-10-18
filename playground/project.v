@@ -1,29 +1,31 @@
-// Falling Leaves: a VGA tree that drops autumn leaves at random.
+// Two-player Pong with a ball trail.
 // https://github.com/PvpGrief/chip-design
 //
 // Single-file bundle for https://vga-playground.com: paste this over
 // project.v. Generated from src/ by sim/make_playground.py; don't edit by hand.
 //
-//   ui_in[0]  storm:  wind, grey sky and lots of leaves
-//   ui_in[1]  freeze: pause the animation
+// Turn on the playground's gamepad mode (gamepad button next to ui_in), then:
+//   left player:  S = up, X = down
+//   right player: arrow up / arrow down
+//   T (Start):    new game
 
 `default_nettype none
 
-// ---- tt_um_falling_leaves.v ------------------------------------------------
+// ---- tt_um_pvpgrief_pong.v -------------------------------------------------
 
-// Falling Leaves: a VGA tree that drops autumn leaves at random.
+// Two-player Pong on VGA (640x480 @ 60 Hz, TinyVGA Pmod), with a fading
+// trail behind the ball.
 //
-// Output is 640x480 @ 60 Hz on the TinyVGA Pmod pinout, drawn in chunky
-// 4x4-pixel blocks (160x120). A free-running LFSR decides when the next leaf
-// lets go (every ~0.5-2.6 s), where on the tree it starts, its colour and how
-// long it lies on the grass afterwards.
-//
-// All drawing logic is evaluated once per block (one clock in four) and held,
-// which keeps the design small and fast to simulate.
-//
-//   ui_in[0]  storm:  wind, grey sky and lots of leaves
-//   ui_in[1]  freeze: pause the animation
-module tt_um_falling_leaves (
+// Controls (1 = pressed):
+//   ui_in[0] / ui_in[1]  left paddle up / down
+//   ui_in[2] / ui_in[3]  right paddle up / down
+//   ui_in[4..6]          Gamepad Pmod (latch, clock, data):
+//                          controller 1 D-pad up/down  -> right paddle
+//                          controller 1 Select / X     -> left paddle up / down
+//                          controller 2 D-pad up/down  -> left paddle
+//                          Start (either controller)   -> new game
+//   ui_in[7]             new game
+module tt_um_pvpgrief_pong (
     input  wire [7:0] ui_in,
     output wire [7:0] uo_out,
     input  wire [7:0] uio_in,
@@ -33,13 +35,10 @@ module tt_um_falling_leaves (
     input  wire       clk,
     input  wire       rst_n
 );
-  wire storm  = ui_in[0];
-  wire freeze = ui_in[1];
-
   wire       hsync, vsync, display_on;
   wire [9:0] hpos, vpos;
 
-  falling_leaves_vga_timing vga (
+  pong_vga_timing vga (
       .clk(clk),
       .rst_n(rst_n),
       .hsync(hsync),
@@ -49,452 +48,592 @@ module tt_um_falling_leaves (
       .vpos(vpos)
   );
 
-  // Animation state advances once per frame, at the start of vertical blank
-  wire frame_tick = (hpos == 10'd0) && (vpos == 10'd480);
-  wire step       = frame_tick && !freeze;
+  // ---- controls -------------------------------------------------------------
+  wire [11:0] pad1, pad2;  // {b, y, select, start, up, down, left, right, a, x, l, r}
 
-  // Draw the block under the beam on its first pixel
-  wire       en = display_on && (hpos[1:0] == 2'd0);
-  wire [7:0] bx = hpos[9:2];
-  wire [6:0] by = vpos[8:2];
-
-  // Leaf sprite rows for the next line are prepared during horizontal blank
-  wire       row_load = (hpos == 10'd700);
-  wire [9:0] next_vpos = (vpos == 10'd524) ? 10'd0 : vpos + 10'd1;
-  wire [6:0] row_by   = next_vpos[8:2];
-
-  // ---- randomness: 32-bit maximal-length Galois LFSR, stepped every line ---
-  reg [31:0] lfsr;
-  always @(posedge clk) begin
-    if (!rst_n)
-      lfsr <= 32'hACE1_2468;
-    else if (hpos == 10'd0)
-      lfsr <= {1'b0, lfsr[31:1]} ^ (lfsr[0] ? 32'h8020_0003 : 32'h0);
-  end
-
-  // ---- leaf spawner ---------------------------------------------------------
-  reg  [7:0] spawn_timer;  // frames until the next leaf lets go
-  wire       spawn_now = step && (spawn_timer == 8'd0);
-
-  // Start somewhere near the middle of one of four leafy blobs
-  reg [9:0] blob_x;
-  reg [8:0] blob_y;
-  always @* begin
-    case (lfsr[9:8])
-      2'd0: begin blob_x = 10'd320; blob_y = 9'd150; end
-      2'd1: begin blob_x = 10'd235; blob_y = 9'd200; end
-      2'd2: begin blob_x = 10'd405; blob_y = 9'd200; end
-      default: begin blob_x = 10'd320; blob_y = 9'd228; end
-    endcase
-  end
-  wire [9:0] spawn_x = blob_x + {4'd0, lfsr[15:10]} - 10'd40;
-  wire [8:0] spawn_y = blob_y + {4'd0, lfsr[20:16]} - 9'd24;
-
-  wire       rotted, leaf_hit;
-  wire [5:0] leaf_rgb;
-
-  falling_leaves_leaves #(.N(8)) u_leaves (
+  pong_gamepad gamepad (
       .clk(clk),
       .rst_n(rst_n),
-      .frame_tick(frame_tick),
-      .freeze(freeze),
-      .wind(storm),
-      .spawn_now(spawn_now),
-      .spawn_x(spawn_x),
-      .spawn_y(spawn_y),
-      .rnd(lfsr),
-      .row_load(row_load),
-      .row_by(row_by),
-      .en(en),
-      .bx(bx),
-      .rotted(rotted),
-      .hit(leaf_hit),
-      .rgb(leaf_rgb)
+      .pmod_latch(ui_in[4]),
+      .pmod_clk(ui_in[5]),
+      .pmod_data(ui_in[6]),
+      .pad1(pad1),
+      .pad2(pad2)
   );
 
-  // ---- scenery state --------------------------------------------------------
-  reg [7:0] cloud_x;
-  reg [3:0] cloud_div;
-  reg [3:0] litter;  // grows as leaves rot on the grass, slowly blows away
-  reg [7:0] decay;
+  wire l_up     = ui_in[0] | pad1[9] | pad2[7];  // button, Select, pad 2 up
+  wire l_down   = ui_in[1] | pad1[2] | pad2[6];  // button, X, pad 2 down
+  wire r_up     = ui_in[2] | pad1[7];            // button, pad 1 up
+  wire r_down   = ui_in[3] | pad1[6];            // button, pad 1 down
+  wire new_game = ui_in[7] | pad1[8] | pad2[8];  // button, Start
 
+  // ---- randomness for serves: 16-bit LFSR, stepped every line ---------------
+  reg [15:0] lfsr;
   always @(posedge clk) begin
-    if (!rst_n) begin
-      spawn_timer <= 8'd20;
-      cloud_x     <= 8'd10;
-      cloud_div   <= 4'd0;
-      litter      <= 4'd0;
-      decay       <= 8'd0;
-    end else if (step) begin
-      if (spawn_timer == 8'd0)
-        spawn_timer <= storm ? 8'd3 + {4'd0, lfsr[24:21]}
-                             : 8'd30 + {1'b0, lfsr[27:21]};
-      else
-        spawn_timer <= spawn_timer - 8'd1;
-
-      cloud_div <= cloud_div + 4'd1;
-      if (storm ? cloud_div[0] : (cloud_div == 4'd0)) cloud_x <= cloud_x + 8'd1;
-
-      decay <= decay + 8'd1;
-      if (rotted) begin
-        if (litter != 4'd15) litter <= litter + 4'd1;
-      end else if (litter != 4'd0 && (decay == 8'd0 || (storm && decay[3:0] == 4'd0)))
-        litter <= litter - 4'd1;
-    end
+    if (!rst_n)              lfsr <= 16'hACE1;
+    else if (hpos == 10'd0)  lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
   end
 
-  // ---- pixel output ---------------------------------------------------------
-  wire [5:0] scene_rgb;
-  falling_leaves_scene scene (
+  // ---- game -----------------------------------------------------------------
+  wire        frame_tick = (hpos == 10'd0) && (vpos == 10'd480);
+  wire        pre_tick1  = (hpos == 10'd0) && (vpos == 10'd478);
+  wire        pre_tick2  = (hpos == 10'd0) && (vpos == 10'd479);
+  wire [8:0]  pl_y, pr_y, ball_y;
+  wire [9:0]  ball_x;
+  wire [49:0] trail_x;
+  wire [44:0] trail_y;
+  wire [3:0]  score_l, score_r;
+  wire        serving, game_over, winner_r, blink;
+
+  pong_game game (
       .clk(clk),
-      .en(en),
-      .bx(bx),
-      .by(by),
-      .cloud_x(cloud_x),
-      .litter(litter),
-      .storm(storm),
-      .rgb(scene_rgb)
+      .rst_n(rst_n),
+      .pre_tick1(pre_tick1),
+      .pre_tick2(pre_tick2),
+      .frame_tick(frame_tick),
+      .new_game(new_game),
+      .l_up(l_up),
+      .l_down(l_down),
+      .r_up(r_up),
+      .r_down(r_down),
+      .rnd(lfsr[2:0]),
+      .pl_y(pl_y),
+      .pr_y(pr_y),
+      .ball_x(ball_x),
+      .ball_y(ball_y),
+      .trail_x(trail_x),
+      .trail_y(trail_y),
+      .score_l(score_l),
+      .score_r(score_r),
+      .serving(serving),
+      .game_over(game_over),
+      .winner_r(winner_r),
+      .blink(blink)
   );
 
-  // The block colours appear one clock after `en`, so sync and blanking are
-  // delayed by one clock to match.
-  reg       hsync_d, vsync_d, display_d;
-  reg       hsync_r, vsync_r;
-  reg [5:0] rgb_r;
+  // ---- picture --------------------------------------------------------------
+  // Per-line data for the next line is prepared during horizontal blank
+  wire       row_load  = (hpos == 10'd700);
+  wire [9:0] row_y     = (vpos == 10'd524) ? 10'd0 : vpos + 10'd1;
+  wire [5:0] rgb;
+
+  pong_render render (
+      .clk(clk),
+      .row_load(row_load),
+      .row_y(row_y),
+      .en(display_on),
+      .x(hpos),
+      .pl_y(pl_y),
+      .pr_y(pr_y),
+      .ball_x(ball_x),
+      .ball_y(ball_y),
+      .trail_x(trail_x),
+      .trail_y(trail_y),
+      .ball_visible(!(serving && blink)),
+      .trail_visible(!serving && !game_over),
+      .score_l(score_l),
+      .score_r(score_r),
+      .hide_l(game_over && !winner_r && blink),
+      .hide_r(game_over && winner_r && blink),
+      .rgb(rgb)
+  );
+
+  // The pixel colour is registered, so delay the syncs by one clock to match
+  reg hsync_r, vsync_r;
   always @(posedge clk) begin
     if (!rst_n) begin
-      hsync_d   <= 1'b1;
-      vsync_d   <= 1'b1;
-      display_d <= 1'b0;
-      hsync_r   <= 1'b1;
-      vsync_r   <= 1'b1;
-      rgb_r     <= 6'd0;
+      hsync_r <= 1'b1;
+      vsync_r <= 1'b1;
     end else begin
-      hsync_d   <= hsync;
-      vsync_d   <= vsync;
-      display_d <= display_on;
-      hsync_r   <= hsync_d;
-      vsync_r   <= vsync_d;
-      rgb_r     <= !display_d ? 6'd0 : leaf_hit ? leaf_rgb : scene_rgb;
+      hsync_r <= hsync;
+      vsync_r <= vsync;
     end
   end
 
   // TinyVGA Pmod: {hsync, B0, G0, R0, vsync, B1, G1, R1}
-  assign uo_out  = {hsync_r, rgb_r[0], rgb_r[2], rgb_r[4], vsync_r, rgb_r[1], rgb_r[3], rgb_r[5]};
+  assign uo_out  = {hsync_r, rgb[0], rgb[2], rgb[4], vsync_r, rgb[1], rgb[3], rgb[5]};
   assign uio_out = 8'd0;
   assign uio_oe  = 8'd0;
 
-  wire _unused = &{ena, uio_in, ui_in[7:2], next_vpos[9], next_vpos[1:0], 1'b0};
+  wire _unused = &{ena, uio_in, pad1[11:10], pad1[5:3], pad1[1:0],
+                   pad2[11:9], pad2[5:0], lfsr[15:3], 1'b0};
 endmodule
 
-// ---- leaves.v --------------------------------------------------------------
+// ---- pong_game.v -----------------------------------------------------------
 
-// The falling leaves: N independent leaf slots.
+// Pong game logic, updated once per frame.
 //
-// Physics run in pixel units once per frame. Drawing is in 4x4-pixel blocks:
-// once per line each leaf's sprite row is looked up (row_load), and per block
-// only a subtract and a bit test per leaf remain. A leaf is a 4x4-block
-// sprite (16x16 pixels) that flutters down from (spawn_x, spawn_y), swinging
-// side to side, lies on the grass for a random while, dissolves and frees
-// its slot. In a storm it falls faster, drifts right and gets blown away.
-module falling_leaves_leaves #(
-    parameter N = 8
-) (
+// Field: walls above y=8 and below y=472. Paddles are 10x64 at x=24 (left)
+// and x=606 (right). The ball is 10x10; where it hits a paddle sets how
+// steeply it bounces off. First to 9 wins.
+//
+// Speeds are in 1/16 px per frame. The ball starts at 4 px/frame across and
+// gets 1/4 px/frame faster on every return, up to 10 px/frame. The paddles
+// always move 3 px/frame faster than the ball does across (7 at the start,
+// up to 13), so they keep up as a rally heats up. Both reset after a point.
+//
+// The last five ball positions (sampled every other frame) are kept for the
+// trail drawn behind the ball.
+module pong_game (
     input  wire        clk,
     input  wire        rst_n,
-    input  wire        frame_tick,  // one pulse per frame, during vblank
-    input  wire        freeze,
-    input  wire        wind,
-    input  wire        spawn_now,   // let a new leaf go (if a slot is free)
-    input  wire [9:0]  spawn_x,     // top-left corner, in pixels
-    input  wire [8:0]  spawn_y,
-    input  wire [31:0] rnd,
-    input  wire        row_load,    // during hblank: prepare the sprite rows for row_by
-    input  wire [6:0]  row_by,
-    input  wire        en,          // draw: evaluate block bx of the current row this clock
-    input  wire [7:0]  bx,
-    output reg         rotted,      // a leaf finished lying on the ground (held for a frame)
-    output wire        hit,         // block bx shows a leaf (valid after en)
-    output wire [5:0]  rgb          // {R[1:0], G[1:0], B[1:0]}
+    input  wire        pre_tick1,   // two lines before frame_tick
+    input  wire        pre_tick2,   // one line before frame_tick
+    input  wire        frame_tick,
+    input  wire        new_game,
+    input  wire        l_up,
+    input  wire        l_down,
+    input  wire        r_up,
+    input  wire        r_down,
+    input  wire [2:0]  rnd,
+    output reg  [8:0]  pl_y,       // left paddle top
+    output reg  [8:0]  pr_y,       // right paddle top
+    output reg  [9:0]  ball_x,     // ball top-left
+    output reg  [8:0]  ball_y,
+    output reg  [49:0] trail_x,    // trail position k is trail_x[10*k +: 10], newest first
+    output reg  [44:0] trail_y,    // ... and trail_y[9*k +: 9]
+    output reg  [3:0]  score_l,
+    output reg  [3:0]  score_r,
+    output wire        serving,    // ball waiting in the middle
+    output wire        game_over,
+    output reg         winner_r,   // who won (valid when game_over)
+    output wire        blink       // ~2 Hz, for blinking things
 );
-  // Per-leaf state, packed into vectors: field of leaf i is e.g. xs[10*i +: 10].
-  // Packed vectors keep simulation fast: unpacked arrays of registers get
-  // extra per-element bookkeeping on every clock in cycle-based simulators.
-  reg [N-1:0]   active;
-  reg [N-1:0]   landed;
-  reg [10*N-1:0] xs;        // top-left corner, pixels
-  reg [9*N-1:0]  ys;
-  reg [9*N-1:0]  ground_ys; // where it will land
-  reg [6*N-1:0]  phases;    // pendulum: [5] = swing direction, [4:0] = progress
-  reg [2*N-1:0]  hues;
-  reg [8*N-1:0]  timers;    // frames left on the ground
+  localparam [8:0] TOP      = 9'd8;
+  localparam [8:0] BOTTOM   = 9'd472;
+  localparam [8:0] PADDLE_H = 9'd64;
+  localparam [9:0] LEFT_FACE  = 10'd34;   // right edge of the left paddle
+  localparam [9:0] RIGHT_FACE = 10'd606;  // left edge of the right paddle
+  localparam [9:0] BALL     = 10'd10;
+  localparam [9:0] CENTER_X = 10'd315;
+  localparam [8:0] CENTER_Y = 9'd235;
+  localparam [8:0] PADDLE_MID = 9'd208;
+  localparam [3:0] WIN      = 4'd9;
 
-  wire [N-1:0] free        = ~active;
-  wire [N-1:0] lowest_free = free & (~free + 1'b1);
+  localparam [7:0] VX_START = 8'h40;  // 4.0 px/frame (4.4 fixed point)
+  localparam [7:0] VX_STEP  = 8'h04;  // +0.25 px/frame per return
+  localparam [7:0] VX_MAX   = 8'hA0;  // 10.0 px/frame
+  localparam [7:0] PADDLE_EXTRA = 8'h30;  // paddles: ball speed + 3.0
+  localparam [12:0] PADDLE_MIN = {TOP, 4'd0};                  // 9.4 fixed point
+  localparam [12:0] PADDLE_MAX = {BOTTOM - PADDLE_H, 4'd0};
 
-  integer i;
+  localparam [1:0] SERVE = 2'd0, PLAY = 2'd1, OVER = 2'd2;
+
+  reg [1:0] state;
+  reg [7:0] timer;
+  reg [7:0] vx;          // ball speed across, 1/16 px per frame
+  reg [3:0] ball_xf;     // fractional parts of the ball and paddle positions
+  reg [3:0] pl_f, pr_f;
+  reg       vx_left;
+  reg [2:0] vy;
+  reg       vy_up;
+  reg       serve_left;  // direction of the next serve
+  reg       trail_tick;
+  reg [4:0] frames;
+
+  assign serving   = (state == SERVE);
+  assign game_over = (state == OVER);
+  assign blink     = frames[4];
+
+  // Bounce angle from where the ball meets the paddle: distance between the
+  // ball's centre and the paddle's centre, /8, at least 1 and at most 6.
+  /* verilator lint_off BLKSEQ */
+  function [3:0] bounce;  // {up, speed}
+    input [8:0] by, py;
+    reg [9:0] d;
+    /* verilator lint_off UNUSED */
+    reg [9:0] ad;  // only ad/8 is used
+    /* verilator lint_on UNUSED */
+    begin
+      d  = {1'b0, by} + 10'd5 - {1'b0, py} - 10'd32;
+      ad = d[9] ? 10'd0 - d : d;
+      if (ad[9:3] == 7'd0)      bounce = {d[9], 3'd1};
+      else if (ad[9:3] > 7'd6)  bounce = {d[9], 3'd6};
+      else                      bounce = {d[9], ad[5:3]};
+    end
+  endfunction
+  /* verilator lint_on BLKSEQ */
+
+  // The frame update is prepared on the two lines before it, in registers,
+  // so this logic only runs a few times per frame (instead of being
+  // continuous logic, which a cycle-based simulator evaluates every clock).
+  reg [13:0] next_x;     // ball x after this frame, 10.4 fixed point
+  reg [8:0] next_y;
+  reg [3:0] bounce_l, bounce_r;
+  reg       hits_left, hits_right, out_left, out_right;
+
+  always @(posedge clk) begin
+    if (pre_tick1) begin
+      next_x   <= vx_left ? {ball_x, ball_xf} - {6'd0, vx} : {ball_x, ball_xf} + {6'd0, vx};
+      next_y   <= vy_up   ? ball_y - {6'd0, vy} : ball_y + {6'd0, vy};
+      bounce_l <= bounce(ball_y, pl_y);
+      bounce_r <= bounce(ball_y, pr_y);
+    end
+    if (pre_tick2) begin
+      hits_left  <= vx_left && ball_x >= LEFT_FACE && next_x[13:4] < LEFT_FACE &&
+                    ball_y + 9'd10 > pl_y && ball_y < pl_y + PADDLE_H;
+      hits_right <= !vx_left && ball_x + BALL <= RIGHT_FACE && next_x[13:4] + BALL > RIGHT_FACE &&
+                    ball_y + 9'd10 > pr_y && ball_y < pr_y + PADDLE_H;
+      out_left   <= vx_left && {ball_x, ball_xf} <= {6'd0, vx};
+      out_right  <= !vx_left && {ball_x, ball_xf} + {6'd0, vx} >= {10'd630, 4'd0};
+    end
+  end
+
   always @(posedge clk) begin
     if (!rst_n) begin
-      active    <= {N{1'b0}};
-      landed    <= {N{1'b0}};
-      rotted    <= 1'b0;
-      xs        <= {10*N{1'b0}};
-      ys        <= {9*N{1'b0}};
-      ground_ys <= {9*N{1'b0}};
-      phases    <= {6*N{1'b0}};
-      hues      <= {2*N{1'b0}};
-      timers    <= {8*N{1'b0}};
+      state      <= SERVE;
+      timer      <= 8'd90;
+      pl_y       <= PADDLE_MID;
+      pr_y       <= PADDLE_MID;
+      ball_x     <= CENTER_X;
+      ball_y     <= CENTER_Y;
+      trail_x    <= {5{CENTER_X}};
+      trail_y    <= {5{CENTER_Y}};
+      vx         <= VX_START;
+      ball_xf    <= 4'd0;
+      pl_f       <= 4'd0;
+      pr_f       <= 4'd0;
+      vx_left    <= 1'b0;
+      vy         <= 3'd1;
+      vy_up      <= 1'b0;
+      serve_left <= 1'b0;
+      score_l    <= 4'd0;
+      score_r    <= 4'd0;
+      winner_r   <= 1'b0;
+      trail_tick <= 1'b0;
+      frames     <= 5'd0;
     end else if (frame_tick) begin
-      rotted <= 1'b0;
-      for (i = 0; i < N; i = i + 1) begin
-        if (spawn_now && lowest_free[i]) begin
-          active[i]           <= 1'b1;
-          landed[i]           <= 1'b0;
-          xs[10*i +: 10]      <= spawn_x;
-          ys[9*i +: 9]        <= spawn_y;
-          ground_ys[9*i +: 9] <= 9'd404 + {4'd0, rnd[30:26]};
-          phases[6*i +: 6]    <= rnd[5:0];
-          hues[2*i +: 2]      <= rnd[7:6];
-        end else if (active[i] && !freeze) begin
-          if (!landed[i]) begin
-            phases[6*i +: 6] <= phases[6*i +: 6] + 6'd1;
-            // sideways 1 px/frame plus wind; down 2 px/frame through the
-            // middle of a swing and 1 px/frame at the ends (+1 in wind)
-            xs[10*i +: 10] <= xs[10*i +: 10] + (phases[6*i+5] ? 10'd1 : 10'h3FF) + {9'd0, wind};
-            ys[9*i +: 9]   <= ys[9*i +: 9]
-                              + {7'd0, phases[6*i+4] ^ phases[6*i+3], ~(phases[6*i+4] ^ phases[6*i+3])}
-                              + {8'd0, wind};
-            if (ys[9*i +: 9] >= ground_ys[9*i +: 9]) begin
-              landed[i]        <= 1'b1;
-              timers[8*i +: 8] <= {1'b1, rnd[6:0]};
-            end
-          end else if (wind) begin
-            xs[10*i +: 10] <= xs[10*i +: 10] + 10'd3;
-          end else begin
-            timers[8*i +: 8] <= timers[8*i +: 8] - 8'd1;
-            if (timers[8*i +: 8] == 8'd0) begin
-              active[i] <= 1'b0;
-              rotted    <= 1'b1;
+      frames <= frames + 5'd1;
+
+      // Paddles move in every state
+      if (l_up && !l_down)
+        {pl_y, pl_f} <= ({pl_y, pl_f} > PADDLE_MIN + {5'd0, vx + PADDLE_EXTRA})
+                        ? {pl_y, pl_f} - {5'd0, vx + PADDLE_EXTRA} : PADDLE_MIN;
+      else if (l_down && !l_up)
+        {pl_y, pl_f} <= ({pl_y, pl_f} + {5'd0, vx + PADDLE_EXTRA} < PADDLE_MAX)
+                        ? {pl_y, pl_f} + {5'd0, vx + PADDLE_EXTRA} : PADDLE_MAX;
+      if (r_up && !r_down)
+        {pr_y, pr_f} <= ({pr_y, pr_f} > PADDLE_MIN + {5'd0, vx + PADDLE_EXTRA})
+                        ? {pr_y, pr_f} - {5'd0, vx + PADDLE_EXTRA} : PADDLE_MIN;
+      else if (r_down && !r_up)
+        {pr_y, pr_f} <= ({pr_y, pr_f} + {5'd0, vx + PADDLE_EXTRA} < PADDLE_MAX)
+                        ? {pr_y, pr_f} + {5'd0, vx + PADDLE_EXTRA} : PADDLE_MAX;
+
+      if (new_game) begin
+        state   <= SERVE;
+        timer   <= 8'd60;
+        score_l <= 4'd0;
+        score_r <= 4'd0;
+        vx      <= VX_START;
+        ball_x  <= CENTER_X;
+        ball_xf <= 4'd0;
+        ball_y  <= CENTER_Y;
+        trail_x <= {5{CENTER_X}};
+        trail_y <= {5{CENTER_Y}};
+      end else begin
+        case (state)
+          SERVE: begin
+            if (timer == 8'd0) begin
+              state   <= PLAY;
+              vx      <= VX_START;
+              vx_left <= serve_left;
+              vy      <= 3'd1 + {1'b0, rnd[1:0] == 2'd3 ? 2'd2 : rnd[1:0]};
+              vy_up   <= rnd[2];
+            end else begin
+              timer <= timer - 8'd1;
             end
           end
-          if (xs[10*i +: 10] >= 10'd640 && xs[10*i +: 10] < 10'd960)
-            active[i] <= 1'b0;  // blown off screen
-        end
+
+          PLAY: begin
+            // trail: remember where the ball was, every other frame
+            trail_tick <= ~trail_tick;
+            if (trail_tick) begin
+              trail_x <= {trail_x[39:0], ball_x};
+              trail_y <= {trail_y[35:0], ball_y};
+            end
+
+            if (hits_left) begin
+              ball_x  <= LEFT_FACE;
+              ball_xf <= 4'd0;
+              vx_left <= 1'b0;
+              if (vx != VX_MAX) vx <= vx + VX_STEP;
+              {vy_up, vy} <= bounce_l;
+            end else if (hits_right) begin
+              ball_x  <= RIGHT_FACE - BALL;
+              ball_xf <= 4'd0;
+              vx_left <= 1'b1;
+              if (vx != VX_MAX) vx <= vx + VX_STEP;
+              {vy_up, vy} <= bounce_r;
+            end else if (out_left || out_right) begin
+              // point to the other player; the loser receives the next serve
+              if (out_left) score_r <= score_r + 4'd1;
+              else          score_l <= score_l + 4'd1;
+              serve_left <= out_left;
+              vx         <= VX_START;
+              ball_x     <= CENTER_X;
+              ball_xf    <= 4'd0;
+              ball_y     <= CENTER_Y;
+              trail_x    <= {5{CENTER_X}};
+              trail_y    <= {5{CENTER_Y}};
+              if ((out_left ? score_r : score_l) == WIN - 4'd1) begin
+                state    <= OVER;
+                timer    <= 8'd240;
+                winner_r <= out_left;
+              end else begin
+                state <= SERVE;
+                timer <= 8'd60;
+              end
+            end else begin
+              {ball_x, ball_xf} <= next_x;
+            end
+
+            // top and bottom walls
+            if (!(out_left || out_right)) begin
+              if (vy_up && next_y <= TOP) begin
+                ball_y <= TOP;
+                vy_up  <= 1'b0;
+              end else if (!vy_up && next_y + 9'd10 >= BOTTOM) begin
+                ball_y <= BOTTOM - 9'd10;
+                vy_up  <= 1'b1;
+              end else if (!(hits_left || hits_right)) begin
+                ball_y <= next_y;
+              end
+            end
+          end
+
+          default: begin  // OVER: show the result for a few seconds, then start again
+            if (timer == 8'd0) begin
+              state   <= SERVE;
+              timer   <= 8'd60;
+              score_l <= 4'd0;
+              score_r <= 4'd0;
+            end else begin
+              timer <= timer - 8'd1;
+            end
+          end
+        endcase
       end
     end
   end
-
-  // ---- drawing ----------------------------------------------------------
-  // Sprite row of leaf k on block row py, indexed by block offset from the
-  // leaf's left edge (already mirrored and dissolved), plus its colour.
-  // Returns {mask[3:0], rgb[5:0]}.
-  /* verilator lint_off BLKSEQ */
-  function [9:0] sprite_row;
-    input integer k;
-    input [6:0]   py;
-    reg [6:0] dy;
-    reg [3:0] mask;
-    reg [5:0] body;
-    begin
-      dy = py - ys[9*k+2 +: 7];
-      // leaf pointing up-right, stem at the bottom-left (bit n = column n)
-      case (dy[1:0])
-        2'd0: mask = 4'b1100;
-        2'd1: mask = 4'b1110;
-        2'd2: mask = 4'b0110;
-        default: mask = 4'b0001;
-      endcase
-      if (!phases[6*k+5]) mask = {mask[0], mask[1], mask[2], mask[3]};  // mirror on each swing
-      if (landed[k] && timers[8*k+4 +: 4] == 4'd0)                       // dissolve at the end
-        mask = mask & (dy[0] ? 4'b0101 : 4'b1010);
-      if (!active[k] || dy >= 7'd4) mask = 4'b0000;
-      case (hues[2*k +: 2])
-        2'd0: body = 6'b11_01_00;  // orange
-        2'd1: body = 6'b11_00_00;  // red
-        2'd2: body = 6'b11_10_00;  // gold
-        default: body = 6'b10_01_00;  // russet
-      endcase
-      sprite_row = {mask, (dy[1:0] == 2'd3) ? 6'b01_00_00 : body};
-    end
-  endfunction
-
-  // Which leaf (if any) covers block px of the prepared row? Lower slots are
-  // drawn on top. Returns {hit, rgb}.
-  function [6:0] leaf_pixel;
-    input [7:0] px;
-    integer   k;
-    reg [7:0] dx;
-    reg [3:0] mask;
-    begin
-      leaf_pixel = 7'd0;
-      for (k = N - 1; k >= 0; k = k - 1) begin
-        dx   = px - row_xs[8*k +: 8];
-        mask = row_infos[10*k + 6 +: 4];
-        if (dx < 8'd4 && mask[dx[1:0]])
-          leaf_pixel = {1'b1, row_infos[10*k +: 6]};
-      end
-    end
-  endfunction
-  /* verilator lint_on BLKSEQ */
-
-  reg [10*N-1:0] row_infos;  // sprite_row() of each leaf for the current line
-  reg [8*N-1:0]  row_xs;     // block column of each leaf
-  reg [6:0]      pixel;      // {hit, rgb}
-
-  assign {hit, rgb} = pixel;
-
-  integer j;
-  always @(posedge clk) begin
-    if (!rst_n) begin
-      pixel     <= 7'd0;
-      row_infos <= {10*N{1'b0}};
-      row_xs    <= {8*N{1'b0}};
-    end else if (row_load) begin
-      for (j = 0; j < N; j = j + 1) begin
-        row_infos[10*j +: 10] <= sprite_row(j, row_by);
-        row_xs[8*j +: 8]      <= xs[10*j+2 +: 8];
-      end
-    end else if (en) begin
-      pixel <= leaf_pixel(bx);
-    end
-  end
-
-  wire _unused = &{rnd[31], rnd[25:8], 1'b0};
 endmodule
 
-// ---- tree_scene.v ----------------------------------------------------------
+// ---- pong_render.v ---------------------------------------------------------
 
-// Background: sky, sun, a drifting cloud, grassy mound, the tree and the
-// pile of fallen leaves under it, drawn in 4x4-pixel blocks (160x120).
-// Only evaluated when `en` is high (once per block); the result is held.
-module falling_leaves_scene (
-    input  wire       clk,
-    input  wire       en,
-    input  wire [7:0] bx,       // block column, 0..159
-    input  wire [6:0] by,       // block row, 0..119
-    input  wire [7:0] cloud_x,  // block column of the cloud's left edge
-    input  wire [3:0] litter,   // how many leaves are lying around (0..15)
-    input  wire       storm,
-    output reg  [5:0] rgb       // {R[1:0], G[1:0], B[1:0]}
+// Draws the Pong screen. Everything that depends only on the line (which
+// objects cross it, which row of the score digits it shows) is worked out
+// once per line during horizontal blank (row_load), so each pixel only needs
+// a few x comparisons.
+module pong_render (
+    input  wire        clk,
+    input  wire        row_load,     // prepare the line row_y (during hblank)
+    input  wire [9:0]  row_y,
+    input  wire        en,           // draw pixel x this clock
+    input  wire [9:0]  x,
+    input  wire [8:0]  pl_y,
+    input  wire [8:0]  pr_y,
+    input  wire [9:0]  ball_x,
+    input  wire [8:0]  ball_y,
+    input  wire [49:0] trail_x,
+    input  wire [44:0] trail_y,
+    input  wire        ball_visible,
+    input  wire        trail_visible,
+    input  wire [3:0]  score_l,
+    input  wire [3:0]  score_r,
+    input  wire        hide_l,       // blink a score off
+    input  wire        hide_r,
+    output reg  [5:0]  rgb           // {R[1:0], G[1:0], B[1:0]}
 );
-  /* verilator lint_off BLKSEQ */
-  // Rounded blob ("octagon") of radius r around (cx, cy)
-  function blob;
-    input [7:0] px, cx;
-    input [6:0] py, cy;
-    input [6:0] r;
-    reg [7:0] ax, ay;
+  localparam [5:0] BACKGROUND = 6'b00_00_01;
+  localparam [5:0] WALL       = 6'b10_10_10;
+  localparam [5:0] BALL       = 6'b11_11_00;
+  localparam [5:0] LEFT       = 6'b00_11_11;
+  localparam [5:0] RIGHT      = 6'b11_00_11;
+
+  // 3x5 digit font, one 3-bit row at a time (bit 2 = left column)
+  function [2:0] font_row;
+    input [3:0] digit;
+    input [2:0] row;
+    reg [14:0] g;
     begin
-      ax   = (px >= cx) ? px - cx : cx - px;
-      ay   = (py >= cy) ? {1'b0, py - cy} : {1'b0, cy - py};
-      blob = (ax < {1'b0, r}) && (ay < {1'b0, r}) &&
-             (ax + ay < {1'b0, r} + {2'b0, r[6:1]});
+      case (digit)
+        4'd0: g = 15'b111_101_101_101_111;
+        4'd1: g = 15'b010_110_010_010_111;
+        4'd2: g = 15'b111_001_111_100_111;
+        4'd3: g = 15'b111_001_111_001_111;
+        4'd4: g = 15'b101_101_111_001_001;
+        4'd5: g = 15'b111_100_111_001_111;
+        4'd6: g = 15'b111_100_111_101_111;
+        4'd7: g = 15'b111_001_001_001_001;
+        4'd8: g = 15'b111_101_111_101_111;
+        default: g = 15'b111_101_111_001_111;
+      endcase
+      case (row)
+        3'd0: font_row = g[14:12];
+        3'd1: font_row = g[11:9];
+        3'd2: font_row = g[8:6];
+        3'd3: font_row = g[5:3];
+        default: font_row = g[2:0];
+      endcase
     end
   endfunction
 
-  function [5:0] shade;
-    input [7:0] px;
-    input [6:0] py;
-    reg [7:0] ax;    // distance from the trunk's centre line
-    reg [7:0] h;     // texture hash
-    reg [6:0] d;
-    reg [7:0] c;
-    reg [3:0] pile;
-    reg [6:0] yy;
+  // Trail: five copies of the ball, newest first, getting smaller (8, 8, 6,
+  // 6, 4 px) so they form a tapering tail in the ball's colour. Each copy is
+  // inset from the ball's top-left corner so that it stays centred.
+
+  // ---- per-line flags ---------------------------------------------------
+  // Does trail copy (cy, size, inset) cross line ry?
+  function copy_row;
+    input [9:0] ry;
+    input [8:0] cy;
+    input [9:0] size, inset;
+    copy_row = (ry - {1'b0, cy} - inset) < size;
+  endfunction
+
+  // Which trail copies cross line ry
+  function [4:0] trail_rows;
+    input [9:0] ry;
+    trail_rows = {copy_row(ry, trail_y[44:36], 10'd4, 10'd3),
+                  copy_row(ry, trail_y[35:27], 10'd6, 10'd2),
+                  copy_row(ry, trail_y[26:18], 10'd6, 10'd2),
+                  copy_row(ry, trail_y[17:9],  10'd8, 10'd1),
+                  copy_row(ry, trail_y[8:0],   10'd8, 10'd1)};
+  endfunction
+
+  function trail_hits;
+    input [9:0] ry;
+    trail_hits = |trail_rows(ry);
+  endfunction
+
+  reg       wall_row, dash_row, pl_row, pr_row, ball_row;
+  reg [4:0] trail_row;
+  reg [2:0] digits_l, digits_r;
+  reg       ball_line;   // the ball or any trail copy crosses this line
+  reg       digit_line;  // a score digit has pixels on this line
+
+  wire [9:0] dy_l    = row_y - {1'b0, pl_y};
+  wire [9:0] dy_r    = row_y - {1'b0, pr_y};
+  wire [9:0] dy_ball = row_y - {1'b0, ball_y};
+  wire [9:0] dy_font = row_y - 10'd32;
+
+  always @(posedge clk) begin
+    if (row_load) begin
+      wall_row <= (row_y < 10'd8) || (row_y >= 10'd472 && row_y < 10'd480);
+      dash_row <= row_y[4] && row_y >= 10'd8 && row_y < 10'd472;
+      pl_row   <= dy_l < 10'd64;
+      pr_row   <= dy_r < 10'd64;
+      ball_row <= ball_visible && dy_ball < 10'd10;
+      trail_row <= trail_visible ? trail_rows(row_y) : 5'b00000;
+      digits_l <= (dy_font < 10'd40 && !hide_l) ? font_row(score_l, dy_font[5:3]) : 3'b000;
+      digits_r <= (dy_font < 10'd40 && !hide_r) ? font_row(score_r, dy_font[5:3]) : 3'b000;
+      ball_line  <= (ball_visible && dy_ball < 10'd10) || (trail_visible && trail_hits(row_y));
+      digit_line <= dy_font < 10'd40;
+    end
+  end
+
+  // ---- per-pixel ----------------------------------------------------------
+  /* verilator lint_off BLKSEQ */
+  // Nested so that the common case (background) takes only a few tests;
+  // the ball/trail and score tests only run on lines that contain them.
+  // (Separate nested ifs and plain expressions, rather than one big
+  // condition or function calls, so a simulator can really skip them.)
+  function [5:0] pixel;
+    input [9:0] px;
     begin
-      ax = (px >= 8'd80) ? px - 8'd80 : 8'd80 - px;
-      h  = (px * 8'd37) ^ ({1'b0, py} * 8'd101);
-      h  = (h ^ {h[4:0], h[7:5]}) * 8'd229;
-      h  = h ^ {h[3:0], h[7:4]};
-      d  = 7'd100 - py;
-
-      if (py >= 7'd100 || (py >= 7'd94 && ax < 8'd40 - {1'b0, d} * 8'd5)) begin
-        // grass, with fallen leaves piling up around the trunk
-        pile = (litter > ax[6:3]) ? litter - ax[6:3] : 4'd0;
-        if (py >= 7'd102 && py < 7'd118 && ax < 8'd44 && h < {1'b0, pile, 3'b000})
-          case (h[1:0])
-            2'd0: shade = 6'b11_01_00;
-            2'd1: shade = 6'b10_01_00;
-            2'd2: shade = 6'b10_10_00;
-            default: shade = 6'b10_00_00;
-          endcase
-        else if (h < 8'd40)  shade = 6'b00_01_00;
-        else if (h > 8'd225) shade = 6'b01_11_00;
-        else                 shade = 6'b00_10_00;
-
-      end else if (py < 7'd77 && ax < 8'd40 &&
-                   (blob(px, 8'd80,  py, 7'd37, 7'd23) ||
-                    blob(px, 8'd57,  py, 7'd52, 7'd16) ||
-                    blob(px, 8'd103, py, 7'd52, 7'd16) ||
-                    blob(px, 8'd66,  py, 7'd27, 7'd15) ||
-                    blob(px, 8'd94,  py, 7'd28, 7'd15) ||
-                    blob(px, 8'd80,  py, 7'd60, 7'd16))) begin
-        // canopy: clumps of light and dark green, a few leaves turning
-        if (h > 8'd238)                                             shade = 6'b11_01_00;
-        else if (h > 8'd224)                                        shade = 6'b10_10_00;
-        else if ((px + {1'b0, py} > 8'd150 || py > 7'd62) && h < 8'd120) shade = 6'b00_01_00;
-        else if (h < 8'd60)                                         shade = 6'b00_01_00;
-        else if (px + {1'b0, py} < 8'd105 && h > 8'd130)            shade = 6'b01_11_00;
-        else if (h > 8'd215)                                        shade = 6'b01_11_00;
-        else                                                        shade = 6'b00_10_00;
-
-      end else if (py >= 7'd60 && ax < 8'd5 + ((py >= 7'd92) ? {2'd0, py[6:1]} - 8'd46 : 8'd0)) begin
-        // trunk, flaring out at the base
-        if (h[2:0] == 3'd0)                         shade = 6'b01_00_00;
-        else if (px < 8'd80 && ax > 8'd1 && ax + 8'd2 >= 8'd5 + ((py >= 7'd92) ? {2'd0, py[6:1]} - 8'd46 : 8'd0))
-                                                    shade = 6'b11_10_01;
-        else if (px > 8'd81)                        shade = 6'b01_00_00;
-        else                                        shade = 6'b10_01_00;
-
+      pixel = BACKGROUND;
+      if (wall_row) begin
+        pixel = WALL;
       end else begin
-        // sky, dithered between bands
-        yy = py + ((px[0] ^ py[0]) ? 7'd3 : 7'd0);
-        if (storm) begin
-          if (yy < 7'd24)      shade = 6'b00_00_01;
-          else if (yy < 7'd48) shade = 6'b00_01_01;
-          else if (yy < 7'd72) shade = 6'b01_01_01;
-          else                 shade = 6'b01_10_10;
+        if (px < 10'd34) begin
+          if (pl_row && px >= 10'd24) pixel = LEFT;
+        end else if (px >= 10'd606) begin
+          if (pr_row && px < 10'd616) pixel = RIGHT;
         end else begin
-          if (yy < 7'd24)      shade = 6'b00_01_10;
-          else if (yy < 7'd48) shade = 6'b00_01_11;
-          else if (yy < 7'd72) shade = 6'b00_10_11;
-          else                 shade = 6'b01_10_11;
+          if (digit_line) begin
+            case (px[9:3])
+              7'd32: if (digits_l[2]) pixel = LEFT;
+              7'd33: if (digits_l[1]) pixel = LEFT;
+              7'd34: if (digits_l[0]) pixel = LEFT;
+              7'd45: if (digits_r[2]) pixel = RIGHT;
+              7'd46: if (digits_r[1]) pixel = RIGHT;
+              7'd47: if (digits_r[0]) pixel = RIGHT;
+              default: ;
+            endcase
+          end
+          if (dash_row && px >= 10'd318 && px < 10'd322) pixel = WALL;
         end
-
-        // sun with a dithered glow
-        if (!storm && px >= 8'd127 && py < 7'd28) begin
-          if (blob(px, 8'd137, py, 7'd17, 7'd6))
-            shade = 6'b11_11_01;
-          else if (blob(px, 8'd137, py, 7'd17, 7'd8) && (px[0] ^ py[0]))
-            shade = 6'b11_11_10;
-        end
-
-        // cloud
-        if (py >= 7'd15 && py < 7'd25) begin
-          c = px - cloud_x;
-          if ((py >= 7'd19 && c < 8'd24 && !((c == 8'd0 || c == 8'd23) && (py == 7'd19 || py == 7'd24))) ||
-              (py <  7'd19 && c >= 8'd5 && c < 8'd17 && !((c == 8'd5 || c == 8'd16) && py == 7'd15)) ||
-              (py >= 7'd17 && c >= 8'd15 && c < 8'd21))
-            shade = storm ? ((py >= 7'd23) ? 6'b01_01_01 : 6'b10_10_10)
-                          : ((py >= 7'd23) ? 6'b10_10_11 : 6'b11_11_11);
+        // the ball and its trail go on top of everything
+        if (ball_line) begin
+          if ((ball_row     && px - ball_x                  < 10'd10) ||
+              (trail_row[0] && px - trail_x[9:0]   - 10'd1 < 10'd8)  ||
+              (trail_row[1] && px - trail_x[19:10] - 10'd1 < 10'd8)  ||
+              (trail_row[2] && px - trail_x[29:20] - 10'd2 < 10'd6)  ||
+              (trail_row[3] && px - trail_x[39:30] - 10'd2 < 10'd6)  ||
+              (trail_row[4] && px - trail_x[49:40] - 10'd3 < 10'd4))
+            pixel = BALL;
         end
       end
     end
   endfunction
   /* verilator lint_on BLKSEQ */
 
-  // Evaluated once per block, inside the clocked block, so a simulator only
-  // runs this logic one clock in four.
   always @(posedge clk) begin
-    if (en) rgb <= shade(bx, by);
+    if (en) rgb <= pixel(x);
+    else    rgb <= 6'd0;
   end
+endmodule
+
+// ---- pong_gamepad.v --------------------------------------------------------
+
+// Reads the Tiny Tapeout Gamepad Pmod: two SNES-style controllers sent as a
+// serial stream on latch/clock/data. 24 bits are shifted in on rising pmod_clk
+// edges and taken over on a rising pmod_latch edge; controller 1 is the last
+// 12 bits. A controller that isn't plugged in reads as all ones.
+//
+// Each pad output is {b, y, select, start, up, down, left, right, a, x, l, r}
+// with 1 = pressed (all zero when the controller is missing).
+module pong_gamepad (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire        pmod_latch,
+    input  wire        pmod_clk,
+    input  wire        pmod_data,
+    output wire [11:0] pad1,
+    output wire [11:0] pad2
+);
+  reg [1:0]  latch_s, clk_s, data_s;  // synchronisers
+  reg        latch_prev, clk_prev;
+  reg [23:0] shift, data;
+
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      latch_s    <= 2'b00;
+      clk_s      <= 2'b00;
+      data_s     <= 2'b00;
+      latch_prev <= 1'b0;
+      clk_prev   <= 1'b0;
+      shift      <= {24{1'b1}};
+      data       <= {24{1'b1}};
+    end else begin
+      latch_s    <= {latch_s[0], pmod_latch};
+      clk_s      <= {clk_s[0], pmod_clk};
+      data_s     <= {data_s[0], pmod_data};
+      latch_prev <= latch_s[1];
+      clk_prev   <= clk_s[1];
+      if (clk_s[1] && !clk_prev) shift <= {shift[22:0], data_s[1]};
+      if (latch_s[1] && !latch_prev) data <= shift;
+    end
+  end
+
+  assign pad1 = (data[11:0]  == 12'hFFF) ? 12'd0 : data[11:0];
+  assign pad2 = (data[23:12] == 12'hFFF) ? 12'd0 : data[23:12];
 endmodule
 
 // ---- hvsync_generator.v ----------------------------------------------------
 
 // 640x480 @ 60 Hz VGA timing (25.175 MHz pixel clock, 25 MHz works too).
 // hsync/vsync are active-low, as this mode requires.
-module falling_leaves_vga_timing (
+module pong_vga_timing (
     input  wire       clk,
     input  wire       rst_n,
     output wire       hsync,
