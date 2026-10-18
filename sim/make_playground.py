@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Bundle src/*.v into one file for https://vga-playground.com.
 
-The playground compiles everything in the project together and always ships
-its own hvsync_generator.v, so our VGA timing module is renamed here.
+The design is a single module, so this only adds a header with the
+playground instructions.
 """
 import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-FILES = ["tt_um_pvpgrief_pong.v", "pong_game.v", "pong_render.v", "pong_gamepad.v", "hvsync_generator.v"]
-RENAMES = [
-    ("module hvsync_generator (", "module pong_vga_timing ("),
-    ("hvsync_generator vga (", "pong_vga_timing vga ("),
-]
+FILES = ["tt_um_pvpgrief_pong.v"]
+RENAMES = []
 
 HEADER = """\
 // Two-player Pong with a ball trail.

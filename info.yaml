@@ -14,10 +14,6 @@ project:
 
   source_files:
     - "tt_um_pvpgrief_pong.v"
-    - "pong_game.v"
-    - "pong_render.v"
-    - "pong_gamepad.v"
-    - "hvsync_generator.v"
 
 # TinyVGA Pmod on the outputs, Gamepad Pmod (or plain buttons) on the inputs
 pinout:
