@@ -1,8 +1,8 @@
 # Pong with a trail
 
 A small digital chip, written in Verilog, that plays two-player Pong on a VGA
-monitor. The ball leaves a tapering trail of copies of itself in the same
-colour, and every return makes it a little faster. The paddles speed up along
+monitor. The ball leaves a tapering trail in the same colour, and every
+return makes it a little faster. The paddles speed up along
 with it, so rallies get more intense without becoming impossible. First to 9
 wins.
 
@@ -33,7 +33,7 @@ The playground only passes the arrow keys and A, B, X, Y, L, R, S and T to
 the chip (as an emulated SNES-style controller), so **W** can't be used;
 S and X sit right above each other, which is the closest match to W/S.
 
-In my tests in the playground's own simulator it ran at about 32 fps, with
+In my tests in the playground's own simulator it ran at about 31 fps, with
 exactly the same pixels as the real chip. The game counts in frames, so below
 60 fps it plays a little slower than on real hardware.
 
@@ -111,22 +111,28 @@ in four sections:
 | Game | Once per frame: paddles, ball physics, bounces, scoring, serve/game-over states, trail history |
 | Picture | Walls, centre line, paddles, score digits, ball and trail |
 
-- **Speed.** Speeds are kept in 1/16 px per frame. The ball starts at
+- **Speed.** Speeds are kept in 1/4 px per frame. The ball starts at
   4 px/frame across and gains 1/4 px/frame on every return, up to
   10 px/frame (after 24 returns). The paddles always move 3 px/frame faster
   than that: 7 px/frame at the start, up to 13. Both reset after each point.
 - **Bounces.** Where the ball meets the paddle sets its vertical speed
   (1 to 6 px/frame): hit it with the paddle's edge for a steep return.
-- **Trail.** The game remembers the ball's last five positions (every other
-  frame) and draws them behind it as copies 8, 8, 6, 6 and 4 px wide.
+- **Trail.** The trail shows where the ball was 2, 4, ... 10 frames ago, as
+  copies 8, 8, 6, 6 and 4 px wide merged into one tapering streak. Between
+  bounces the ball moves in a straight line, so those positions aren't
+  stored: during each line's horizontal blank the chip steps back through
+  them one per clock, using the ball's speed, and records which stretch of
+  the line the ball and trail cover. After a bounce the trail grows back
+  over 10 frames.
 - **Serve and game over.** After a point the ball blinks in the middle for a
   second, then goes toward the player who lost the point, at a random
   angle. At 9 points the winner's score blinks for 4 s and a new game starts.
 - **Drawing.** Everything that only depends on the line (which objects cross
-  it, which row of the digits it shows) is worked out once per line during
-  horizontal blanking, so each pixel needs only a few comparisons. The per-
-  frame game logic is likewise prepared on the two lines before the update.
-  This keeps the design small and fast to simulate.
+  it, which row of the digits it shows, the trail's span) is worked out once
+  per line during horizontal blanking, so each pixel needs only a few
+  comparisons. The left and right paddle/score share one row test and one
+  font lookup, done on consecutive clocks. This keeps the design small and
+  fast to simulate.
 
 ## Running it
 
@@ -159,7 +165,8 @@ presses the chip's buttons. It checks:
 
 ## Size
 
-Generic Yosys synthesis gives about 4.2k gates and 355 flip-flops. The
-`tiles: "3x2"` in `info.yaml` is an estimate that has not been through the
-Tiny Tapeout hardening flow yet. The design also fits easily on any small
-FPGA with a VGA output.
+The design is sized for **1x2** Tiny Tapeout tiles (about 161 × 226 µm).
+Synthesised to SkyWater 130 nm cells it is about 14,600 µm² of logic with
+215 flip-flops. The build summary in the Actions tab has the exact
+utilisation after placement. It also fits easily on any small FPGA with a
+VGA output.

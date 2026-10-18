@@ -7,8 +7,8 @@ project:
   language:     "Verilog"
   clock_hz:     25175000
 
-  # ~4.2k generic gates after Yosys synthesis; estimate, not yet hardened
-  tiles: "1x3"
+  # How many tiles your design occupies? Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
+  tiles: "1x2"
 
   top_module:  "tt_um_pvpgrief_pong"
 

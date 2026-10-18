@@ -18,7 +18,8 @@
 // paddles speed up with it. First to 9 wins.
 //
 // The whole design is this one module (no submodules), so tools that look
-// for the Tiny Tapeout ports on "the" module always find them.
+// for the Tiny Tapeout ports on "the" module always find them. It is kept
+// small enough for 1x2 Tiny Tapeout tiles.
 //
 // Controls (1 = pressed):
 //   ui_in[0] / ui_in[1]  left paddle up / down
@@ -70,11 +71,9 @@ module tt_um_pvpgrief_pong (
   wire vsync      = ~((vpos >= V_SYNC_START) && (vpos < V_SYNC_END));
   wire display_on = (hpos < H_DISPLAY) && (vpos < V_DISPLAY);
 
-  // Once per frame the game advances (at the start of vertical blank); it is
-  // prepared on the two lines before. Per-line drawing data is prepared
-  // during horizontal blank for the next line.
-  wire       pre_tick1  = (hpos == 10'd0) && (vpos == 10'd478);
-  wire       pre_tick2  = (hpos == 10'd0) && (vpos == 10'd479);
+  // Once per frame the game advances (at the start of vertical blank).
+  // Per-line drawing data is prepared during horizontal blank for the next
+  // line.
   wire       frame_tick = (hpos == 10'd0) && (vpos == 10'd480);
   wire       row_load   = (hpos == 10'd700);
   wire [9:0] row_y      = (vpos == V_MAX) ? 10'd0 : vpos + 10'd1;
@@ -87,9 +86,15 @@ module tt_um_pvpgrief_pong (
   // on a rising latch edge; controller 1 is the last 12 bits. A controller
   // that isn't plugged in reads as all ones. Pad bits:
   // {b, y, select, start, up, down, left, right, a, x, l, r}, 1 = pressed.
+  // Only the buttons the game uses are kept (and zeroed for a missing pad).
   reg [1:0]  gp_latch_s, gp_clk_s, gp_data_s;  // synchronisers
   reg        gp_latch_prev, gp_clk_prev;
-  reg [23:0] gp_shift, gp_data;
+  reg [23:0] gp_shift;
+  reg [4:0]  pad1;  // {select, start, up, down, x}
+  reg [2:0]  pad2;  // {start, up, down}
+
+  wire pad1_present = (gp_shift[11:0]  != 12'hFFF);
+  wire pad2_present = (gp_shift[23:12] != 12'hFFF);
 
   always @(posedge clk) begin
     if (!rst_n) begin
@@ -99,7 +104,8 @@ module tt_um_pvpgrief_pong (
       gp_latch_prev <= 1'b0;
       gp_clk_prev   <= 1'b0;
       gp_shift      <= {24{1'b1}};
-      gp_data       <= {24{1'b1}};
+      pad1          <= 5'd0;
+      pad2          <= 3'd0;
     end else begin
       gp_latch_s    <= {gp_latch_s[0], ui_in[4]};
       gp_clk_s      <= {gp_clk_s[0], ui_in[5]};
@@ -107,24 +113,24 @@ module tt_um_pvpgrief_pong (
       gp_latch_prev <= gp_latch_s[1];
       gp_clk_prev   <= gp_clk_s[1];
       if (gp_clk_s[1] && !gp_clk_prev) gp_shift <= {gp_shift[22:0], gp_data_s[1]};
-      if (gp_latch_s[1] && !gp_latch_prev) gp_data <= gp_shift;
+      if (gp_latch_s[1] && !gp_latch_prev) begin
+        pad1 <= pad1_present ? {gp_shift[9:6], gp_shift[2]} : 5'd0;
+        pad2 <= pad2_present ? gp_shift[20:18] : 3'd0;
+      end
     end
   end
 
-  wire [11:0] pad1 = (gp_data[11:0]  == 12'hFFF) ? 12'd0 : gp_data[11:0];
-  wire [11:0] pad2 = (gp_data[23:12] == 12'hFFF) ? 12'd0 : gp_data[23:12];
+  wire l_up     = ui_in[0] | pad1[4] | pad2[1];  // button, Select, pad 2 up
+  wire l_down   = ui_in[1] | pad1[0] | pad2[0];  // button, X, pad 2 down
+  wire r_up     = ui_in[2] | pad1[2];            // button, pad 1 up
+  wire r_down   = ui_in[3] | pad1[1];            // button, pad 1 down
+  wire new_game = ui_in[7] | pad1[3] | pad2[2];  // button, Start
 
-  wire l_up     = ui_in[0] | pad1[9] | pad2[7];  // button, Select, pad 2 up
-  wire l_down   = ui_in[1] | pad1[2] | pad2[6];  // button, X, pad 2 down
-  wire r_up     = ui_in[2] | pad1[7];            // button, pad 1 up
-  wire r_down   = ui_in[3] | pad1[6];            // button, pad 1 down
-  wire new_game = ui_in[7] | pad1[8] | pad2[8];  // button, Start
-
-  // Randomness for serves: 16-bit LFSR, stepped every line
-  reg [15:0] lfsr;
+  // Randomness for serves: 8-bit LFSR, stepped every line
+  reg [7:0] lfsr;
   always @(posedge clk) begin
-    if (!rst_n)              lfsr <= 16'hACE1;
-    else if (hpos == 10'd0)  lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
+    if (!rst_n)              lfsr <= 8'hA5;
+    else if (hpos == 10'd0)  lfsr <= {lfsr[6:0], lfsr[7] ^ lfsr[5] ^ lfsr[4] ^ lfsr[3]};
   end
 
   // ===========================================================================
@@ -134,7 +140,7 @@ module tt_um_pvpgrief_pong (
   // and x=606 (right). The ball is 10x10; where it hits a paddle sets how
   // steeply it bounces off.
   //
-  // Speeds are in 1/16 px per frame. The ball starts at 4 px/frame across and
+  // Speeds are in 1/4 px per frame. The ball starts at 4 px/frame across and
   // gets 1/4 px/frame faster on every return, up to 10 px/frame. The paddles
   // always move 3 px/frame faster than the ball does across (7 at the start,
   // up to 13), so they keep up as a rally heats up. Both reset after a point.
@@ -149,23 +155,23 @@ module tt_um_pvpgrief_pong (
   localparam [8:0] PADDLE_MID = 9'd208;
   localparam [3:0] WIN        = 4'd9;
 
-  localparam [7:0]  VX_START     = 8'h40;  // 4.0 px/frame (4.4 fixed point)
-  localparam [7:0]  VX_STEP      = 8'h04;  // +0.25 px/frame per return
-  localparam [7:0]  VX_MAX       = 8'hA0;  // 10.0 px/frame
-  localparam [7:0]  PADDLE_EXTRA = 8'h30;  // paddles: ball speed + 3.0
-  localparam [12:0] PADDLE_MIN   = {TOP, 4'd0};             // 9.4 fixed point
-  localparam [12:0] PADDLE_MAX   = {BOTTOM - PADDLE_H, 4'd0};
+  localparam [5:0]  VX_START     = 6'd16;  // 4.0 px/frame (4.2 fixed point)
+  localparam [5:0]  VX_STEP      = 6'd1;   // +0.25 px/frame per return
+  localparam [5:0]  VX_MAX       = 6'd40;  // 10.0 px/frame
+  localparam [5:0]  PADDLE_EXTRA = 6'd12;  // paddles: ball speed + 3.0
+  localparam [10:0] PADDLE_MIN   = {TOP, 2'd0};             // 9.2 fixed point
+  localparam [10:0] PADDLE_MAX   = {BOTTOM - PADDLE_H, 2'd0};
 
   localparam [1:0] SERVE = 2'd0, PLAY = 2'd1, OVER = 2'd2;
 
   reg [1:0]  state;
   reg [7:0]  timer;
   reg [8:0]  pl_y, pr_y;    // paddle tops
-  reg [3:0]  pl_f, pr_f;    // ... and their fractional parts
+  reg [1:0]  pl_f, pr_f;    // ... and their fractional parts
   reg [9:0]  ball_x;        // ball top-left
-  reg [3:0]  ball_xf;
+  reg [1:0]  ball_xf;
   reg [8:0]  ball_y;
-  reg [7:0]  vx;            // ball speed across, 1/16 px per frame
+  reg [5:0]  vx;            // ball speed across, 1/4 px per frame
   reg        vx_left;
   reg [2:0]  vy;            // ball speed up/down, px per frame
   reg        vy_up;
@@ -174,10 +180,11 @@ module tt_um_pvpgrief_pong (
   reg        winner_r;      // who won (valid in OVER)
   reg [4:0]  frames;
   reg        trail_tick;
-  // The last five ball positions (every other frame), newest first: copy k
-  // is at trail_x[10*k +: 10], trail_y[9*k +: 9].
-  reg [49:0] trail_x;
-  reg [44:0] trail_y;
+  // The trail shows where the ball was 2, 4, ... 10 frames ago. Between
+  // bounces the ball moves in a straight line, so those positions are
+  // worked out from its speed instead of being stored; after a bounce the
+  // trail starts again and grows back one copy every other frame.
+  reg [2:0]  trail_len;     // how many trail copies are valid (0..5)
 
   wire serving   = (state == SERVE);
   wire game_over = (state == OVER);
@@ -202,30 +209,35 @@ module tt_um_pvpgrief_pong (
   endfunction
   /* verilator lint_on BLKSEQ */
 
-  // The frame update is prepared on the two lines before it, in registers,
-  // so this logic only runs a few times per frame (instead of being
-  // continuous logic, which a cycle-based simulator evaluates every clock).
-  reg [13:0] next_x;  // ball x after this frame, 10.4 fixed point
-  reg [8:0]  next_y;
-  reg [3:0]  bounce_l, bounce_r;
-  reg        hits_left, hits_right, out_left, out_right;
+  // Ball position after this frame (10.2 fixed point), and what happens on
+  // the way. Only used at frame_tick.
+  wire [11:0] next_x = vx_left ? {ball_x, ball_xf} - {6'd0, vx} : {ball_x, ball_xf} + {6'd0, vx};
+  wire [8:0]  next_y = vy_up   ? ball_y - {6'd0, vy} : ball_y + {6'd0, vy};
+  // only the paddle the ball is heading for matters
+  wire [8:0] facing_y   = vx_left ? pl_y : pr_y;
+  wire       facing_hit = ball_y + 9'd10 > facing_y && ball_y < facing_y + PADDLE_H;
+  wire hits_left  = vx_left && ball_x >= LEFT_FACE && next_x[11:2] < LEFT_FACE && facing_hit;
+  wire hits_right = !vx_left && ball_x + BALL_SIZE <= RIGHT_FACE && next_x[11:2] + BALL_SIZE > RIGHT_FACE &&
+                    facing_hit;
+  wire out_left   = vx_left && {ball_x, ball_xf} <= {6'd0, vx};
+  wire out_right  = !vx_left && {ball_x, ball_xf} + {6'd0, vx} >= {10'd630, 2'd0};
+  wire hits_top    = vy_up && next_y <= TOP;
+  wire [3:0] bounce_dir = bounce(ball_y, facing_y);
+  wire hits_bottom = !vy_up && next_y + 9'd10 >= BOTTOM;
 
-  always @(posedge clk) begin
-    if (pre_tick1) begin
-      next_x   <= vx_left ? {ball_x, ball_xf} - {6'd0, vx} : {ball_x, ball_xf} + {6'd0, vx};
-      next_y   <= vy_up   ? ball_y - {6'd0, vy} : ball_y + {6'd0, vy};
-      bounce_l <= bounce(ball_y, pl_y);
-      bounce_r <= bounce(ball_y, pr_y);
+  // A paddle (9.2 fixed point) after one frame of up/down at speed s
+  function [10:0] move_paddle;
+    input [10:0] p;
+    input        up, down;
+    input [5:0]  s;
+    begin
+      if (up && !down)      move_paddle = (p > PADDLE_MIN + {5'd0, s}) ? p - {5'd0, s} : PADDLE_MIN;
+      else if (down && !up) move_paddle = (p + {5'd0, s} < PADDLE_MAX) ? p + {5'd0, s} : PADDLE_MAX;
+      else                  move_paddle = p;
     end
-    if (pre_tick2) begin
-      hits_left  <= vx_left && ball_x >= LEFT_FACE && next_x[13:4] < LEFT_FACE &&
-                    ball_y + 9'd10 > pl_y && ball_y < pl_y + PADDLE_H;
-      hits_right <= !vx_left && ball_x + BALL_SIZE <= RIGHT_FACE && next_x[13:4] + BALL_SIZE > RIGHT_FACE &&
-                    ball_y + 9'd10 > pr_y && ball_y < pr_y + PADDLE_H;
-      out_left   <= vx_left && {ball_x, ball_xf} <= {6'd0, vx};
-      out_right  <= !vx_left && {ball_x, ball_xf} + {6'd0, vx} >= {10'd630, 4'd0};
-    end
-  end
+  endfunction
+
+  wire [5:0] paddle_speed = vx + PADDLE_EXTRA;
 
   always @(posedge clk) begin
     if (!rst_n) begin
@@ -233,13 +245,12 @@ module tt_um_pvpgrief_pong (
       timer      <= 8'd90;
       pl_y       <= PADDLE_MID;
       pr_y       <= PADDLE_MID;
-      pl_f       <= 4'd0;
-      pr_f       <= 4'd0;
+      pl_f       <= 2'd0;
+      pr_f       <= 2'd0;
       ball_x     <= CENTER_X;
-      ball_xf    <= 4'd0;
+      ball_xf    <= 2'd0;
       ball_y     <= CENTER_Y;
-      trail_x    <= {5{CENTER_X}};
-      trail_y    <= {5{CENTER_Y}};
+      trail_len  <= 3'd0;
       vx         <= VX_START;
       vx_left    <= 1'b0;
       vy         <= 3'd1;
@@ -254,36 +265,26 @@ module tt_um_pvpgrief_pong (
       frames <= frames + 5'd1;
 
       // Paddles move in every state
-      if (l_up && !l_down)
-        {pl_y, pl_f} <= ({pl_y, pl_f} > PADDLE_MIN + {5'd0, vx + PADDLE_EXTRA})
-                        ? {pl_y, pl_f} - {5'd0, vx + PADDLE_EXTRA} : PADDLE_MIN;
-      else if (l_down && !l_up)
-        {pl_y, pl_f} <= ({pl_y, pl_f} + {5'd0, vx + PADDLE_EXTRA} < PADDLE_MAX)
-                        ? {pl_y, pl_f} + {5'd0, vx + PADDLE_EXTRA} : PADDLE_MAX;
-      if (r_up && !r_down)
-        {pr_y, pr_f} <= ({pr_y, pr_f} > PADDLE_MIN + {5'd0, vx + PADDLE_EXTRA})
-                        ? {pr_y, pr_f} - {5'd0, vx + PADDLE_EXTRA} : PADDLE_MIN;
-      else if (r_down && !r_up)
-        {pr_y, pr_f} <= ({pr_y, pr_f} + {5'd0, vx + PADDLE_EXTRA} < PADDLE_MAX)
-                        ? {pr_y, pr_f} + {5'd0, vx + PADDLE_EXTRA} : PADDLE_MAX;
+      {pl_y, pl_f} <= move_paddle({pl_y, pl_f}, l_up, l_down, paddle_speed);
+      {pr_y, pr_f} <= move_paddle({pr_y, pr_f}, r_up, r_down, paddle_speed);
 
       if (new_game) begin
         state   <= SERVE;
         timer   <= 8'd60;
         score_l <= 4'd0;
         score_r <= 4'd0;
-        vx      <= VX_START;
-        ball_x  <= CENTER_X;
-        ball_xf <= 4'd0;
-        ball_y  <= CENTER_Y;
-        trail_x <= {5{CENTER_X}};
-        trail_y <= {5{CENTER_Y}};
+        vx        <= VX_START;
+        ball_x    <= CENTER_X;
+        ball_xf   <= 2'd0;
+        ball_y    <= CENTER_Y;
+        trail_len <= 3'd0;
       end else begin
         case (state)
           SERVE: begin
             if (timer == 8'd0) begin
-              state   <= PLAY;
-              vx      <= VX_START;
+              state     <= PLAY;
+              trail_len <= 3'd0;
+              vx        <= VX_START;
               vx_left <= serve_left;
               vy      <= 3'd1 + {1'b0, lfsr[1:0] == 2'd3 ? 2'd2 : lfsr[1:0]};
               vy_up   <= lfsr[2];
@@ -293,25 +294,25 @@ module tt_um_pvpgrief_pong (
           end
 
           PLAY: begin
-            // trail: remember where the ball was, every other frame
+            // trail: one more copy every other frame, starting again on a bounce
             trail_tick <= ~trail_tick;
-            if (trail_tick) begin
-              trail_x <= {trail_x[39:0], ball_x};
-              trail_y <= {trail_y[35:0], ball_y};
-            end
+            if (hits_left || hits_right || hits_top || hits_bottom)
+              trail_len <= 3'd0;
+            else if (trail_tick && trail_len != 3'd5)
+              trail_len <= trail_len + 3'd1;
 
             if (hits_left) begin
               ball_x  <= LEFT_FACE;
-              ball_xf <= 4'd0;
+              ball_xf <= 2'd0;
               vx_left <= 1'b0;
               if (vx != VX_MAX) vx <= vx + VX_STEP;
-              {vy_up, vy} <= bounce_l;
+              {vy_up, vy} <= bounce_dir;
             end else if (hits_right) begin
               ball_x  <= RIGHT_FACE - BALL_SIZE;
-              ball_xf <= 4'd0;
+              ball_xf <= 2'd0;
               vx_left <= 1'b1;
               if (vx != VX_MAX) vx <= vx + VX_STEP;
-              {vy_up, vy} <= bounce_r;
+              {vy_up, vy} <= bounce_dir;
             end else if (out_left || out_right) begin
               // point to the other player; the loser receives the next serve
               if (out_left) score_r <= score_r + 4'd1;
@@ -319,10 +320,8 @@ module tt_um_pvpgrief_pong (
               serve_left <= out_left;
               vx         <= VX_START;
               ball_x     <= CENTER_X;
-              ball_xf    <= 4'd0;
+              ball_xf    <= 2'd0;
               ball_y     <= CENTER_Y;
-              trail_x    <= {5{CENTER_X}};
-              trail_y    <= {5{CENTER_Y}};
               if ((out_left ? score_r : score_l) == WIN - 4'd1) begin
                 state    <= OVER;
                 timer    <= 8'd240;
@@ -337,10 +336,10 @@ module tt_um_pvpgrief_pong (
 
             // top and bottom walls
             if (!(out_left || out_right)) begin
-              if (vy_up && next_y <= TOP) begin
+              if (hits_top) begin
                 ball_y <= TOP;
                 vy_up  <= 1'b0;
-              end else if (!vy_up && next_y + 9'd10 >= BOTTOM) begin
+              end else if (hits_bottom) begin
                 ball_y <= BOTTOM - 9'd10;
                 vy_up  <= 1'b1;
               end else if (!(hits_left || hits_right)) begin
@@ -409,60 +408,84 @@ module tt_um_pvpgrief_pong (
     end
   endfunction
 
-  // Trail: five copies of the ball, newest first, getting smaller (8, 8, 6,
-  // 6, 4 px) so they form a tapering tail in the ball's colour. Each copy is
-  // inset from the ball's top-left corner so that it stays centred.
-  function copy_row;  // does trail copy (cy, size, inset) cross line ry?
-    input [9:0] ry;
-    input [8:0] cy;
-    input [9:0] size, inset;
-    copy_row = (ry - {1'b0, cy} - inset) < size;
+  // Trail: five copies of the ball from 2, 4, ... 10 frames ago, getting
+  // smaller (8, 8, 6, 6, 4 px) so they form a tapering tail in the ball's
+  // colour. During horizontal blank the copies are stepped through one per
+  // clock (each is one "2 frames of movement" further back), and the span
+  // of the line covered by the ball and the copies crossing it is recorded.
+  // Each pixel then only needs to check that one span.
+  function [3:0] copy_size;
+    input [2:0] k;
+    copy_size = (k < 3'd2) ? 4'd8 : (k < 3'd4) ? 4'd6 : 4'd4;
   endfunction
 
-  function [4:0] trail_rows;  // which trail copies cross line ry
-    input [9:0] ry;
-    trail_rows = {copy_row(ry, trail_y[44:36], 10'd4, 10'd3),
-                  copy_row(ry, trail_y[35:27], 10'd6, 10'd2),
-                  copy_row(ry, trail_y[26:18], 10'd6, 10'd2),
-                  copy_row(ry, trail_y[17:9],  10'd8, 10'd1),
-                  copy_row(ry, trail_y[8:0],   10'd8, 10'd1)};
-  endfunction
-
-  function trail_hits;
-    input [9:0] ry;
-    trail_hits = |trail_rows(ry);
-  endfunction
-
-  // ---- per-line flags, for line row_y -------------------------------------
-  reg       wall_row, dash_row, pl_row, pr_row, ball_row;
-  reg [4:0] trail_row;
+  // ---- per-line data, for line row_y --------------------------------------
+  reg       wall_row, dash_row, pl_row, pr_row;
   reg [2:0] digits_l, digits_r;
-  reg       ball_line;   // the ball or any trail copy crosses this line
   reg       digit_line;  // a score digit has pixels on this line
+  reg [9:0] span_lo, span_hi;  // ball + trail cover pixels span_lo .. span_hi-1
 
-  wire [9:0] dy_l    = row_y - {1'b0, pl_y};
-  wire [9:0] dy_r    = row_y - {1'b0, pr_y};
-  wire [9:0] dy_ball = row_y - {1'b0, ball_y};
-  wire [9:0] dy_font = row_y - 10'd32;
+  // stepping through the trail copies
+  reg        tr_on;     // still stepping
+  reg [2:0]  tr_k;      // copy being looked at
+  reg [11:0] tr_x;      // its position (x in 10.2 fixed point)
+  reg [8:0]  tr_y;
+
+  // The left and right paddle/score share one row test and one font lookup:
+  // the left side is done at row_load, the right side one clock later.
+  wire       right_side = (hpos == 10'd701);
+  wire [9:0] dy_paddle  = row_y - {1'b0, right_side ? pr_y : pl_y};
+  wire [9:0] dy_ball    = row_y - {1'b0, ball_y};
+  wire [9:0] dy_font    = row_y - 10'd32;
+  wire [2:0] font_bits  = (dy_font < 10'd40 && !(right_side ? hide_r : hide_l))
+                          ? font_row(right_side ? score_r : score_l, dy_font[5:3]) : 3'b000;
+
+  // one trail step: the copy 2 frames further back than (tr_x, tr_y)
+  wire [11:0] step_x  = vx_left ? tr_x + {5'd0, vx, 1'b0} : tr_x - {5'd0, vx, 1'b0};
+  wire [8:0]  step_y  = vy_up   ? tr_y + {5'd0, vy, 1'b0} : tr_y - {5'd0, vy, 1'b0};
+  wire [3:0]  size_k  = copy_size(tr_k);
+  wire [9:0]  inset_k = {7'd0, 3'd5 - size_k[3:1]};
+  wire [9:0]  copy_lo = step_x[11:2] + inset_k;
+  wire [9:0]  copy_hi = copy_lo + {6'd0, size_k};
+  wire        copy_on = (row_y - {1'b0, step_y} - inset_k) < {6'd0, size_k};
 
   always @(posedge clk) begin
     if (row_load) begin
       wall_row   <= (row_y < 10'd8) || (row_y >= 10'd472 && row_y < 10'd480);
       dash_row   <= row_y[4] && row_y >= 10'd8 && row_y < 10'd472;
-      pl_row     <= dy_l < 10'd64;
-      pr_row     <= dy_r < 10'd64;
-      ball_row   <= ball_visible && dy_ball < 10'd10;
-      trail_row  <= trail_visible ? trail_rows(row_y) : 5'b00000;
-      digits_l   <= (dy_font < 10'd40 && !hide_l) ? font_row(score_l, dy_font[5:3]) : 3'b000;
-      digits_r   <= (dy_font < 10'd40 && !hide_r) ? font_row(score_r, dy_font[5:3]) : 3'b000;
-      ball_line  <= (ball_visible && dy_ball < 10'd10) || (trail_visible && trail_hits(row_y));
+      pl_row     <= dy_paddle < 10'd64;
+      digits_l   <= font_bits;
       digit_line <= dy_font < 10'd40;
+      if (ball_visible && dy_ball < 10'd10) begin
+        span_lo <= ball_x;
+        span_hi <= ball_x + 10'd10;
+      end else begin
+        span_lo <= 10'h3FF;
+        span_hi <= 10'h000;
+      end
+      tr_on <= trail_visible && trail_len != 3'd0;
+      tr_k  <= 3'd0;
+      tr_x  <= {ball_x, ball_xf};
+      tr_y  <= ball_y;
+    end else if (tr_on) begin
+      tr_x <= step_x;
+      tr_y <= step_y;
+      if (copy_on) begin
+        if (copy_lo < span_lo) span_lo <= copy_lo;
+        if (copy_hi > span_hi) span_hi <= copy_hi;
+      end
+      tr_k  <= tr_k + 3'd1;
+      tr_on <= tr_k + 3'd1 < trail_len;
+    end
+    if (right_side) begin
+      pr_row   <= dy_paddle < 10'd64;
+      digits_r <= font_bits;
     end
   end
 
   // ---- per pixel -------------------------------------------------------------
   // Nested so that the common case (background) takes only a few tests;
-  // the ball/trail and score tests only run on lines that contain them.
+  // the score tests only run on lines that contain them.
   // (Separate nested ifs and plain expressions, rather than one big
   // condition or function calls, so a simulator can really skip them.)
   /* verilator lint_off BLKSEQ */
@@ -492,15 +515,7 @@ module tt_um_pvpgrief_pong (
           if (dash_row && px >= 10'd318 && px < 10'd322) pixel = WALL_RGB;
         end
         // the ball and its trail go on top of everything
-        if (ball_line) begin
-          if ((ball_row     && px - ball_x                  < 10'd10) ||
-              (trail_row[0] && px - trail_x[9:0]   - 10'd1 < 10'd8)  ||
-              (trail_row[1] && px - trail_x[19:10] - 10'd1 < 10'd8)  ||
-              (trail_row[2] && px - trail_x[29:20] - 10'd2 < 10'd6)  ||
-              (trail_row[3] && px - trail_x[39:30] - 10'd2 < 10'd6)  ||
-              (trail_row[4] && px - trail_x[49:40] - 10'd3 < 10'd4))
-            pixel = BALL_RGB;
-        end
+        if (px >= span_lo && px < span_hi) pixel = BALL_RGB;
       end
     end
   endfunction
@@ -526,6 +541,5 @@ module tt_um_pvpgrief_pong (
   assign uio_out = 8'd0;
   assign uio_oe  = 8'd0;
 
-  wire _unused = &{ena, uio_in, pad1[11:10], pad1[5:3], pad1[1:0],
-                   pad2[11:9], pad2[5:0], lfsr[15:3], 1'b0};
+  wire _unused = &{ena, uio_in, lfsr[7:3], 1'b0};
 endmodule
