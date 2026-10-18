@@ -8,7 +8,7 @@ project:
   clock_hz:     25175000
 
   # ~4.2k generic gates after Yosys synthesis; estimate, not yet hardened
-  tiles: "3x2"
+  tiles: "1x2"
 
   top_module:  "tt_um_pvpgrief_pong"
 
